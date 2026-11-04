@@ -196,8 +196,12 @@ E2E 脚本有三个坑已经踩过，不要退回旧写法：headless 下 `--loa
 2. `npm test`、`npm run check` 全绿；有条件再跑一次 `npm run e2e`
 3. `npm run pack` → 产出 `out/bili-recommend-filter-<版本>.zip`，24 个文件、manifest 在 zip 根目录
 4. 用 zip 里的内容实际载入一次：解压 → `chrome://extensions` → 「加载已解压的扩展程序」→ 打开任意播放页看过滤是否正常
-5. 提交并打 tag：`git tag v<版本>`、`git push origin main --tags`
-6. 建 Release 并附上 zip：`gh release create v<版本> out/bili-recommend-filter-<版本>.zip --title "..." --notes "..."`
+5. 提交并推送：`git add -A && git commit && git push`
+6. 建 Release 并附上 zip：`gh release create v<版本> out/bili-recommend-filter-<版本>.zip --title "..." --notes-file <文件>`
+
+**第 6 步是发版流程的固定环节，不用再问用户要不要发（2026-11-04 已明确授权）。** `gh release create` 会自动在默认分支 HEAD 上建 tag，所以不必单独 `git tag`；但如果手动打了 tag，要确保它指向刚推上去的那个 commit。
+
+发完核对三件事：`gh release view v<版本> --json tagName,isDraft,assets` 看 tag 是不是 HEAD、附件大小与本地产出的 zip 一致、`isDraft` 为 false。Release 说明写清「新增了什么 / 修了什么 / 已知限制 / 安装步骤」，别只丢个包。
 
 版本号同时也是 Chrome 认的那个版本（`chrome://extensions` 卡片上显示的就是它），所以只改了边角代码但功能无变化时，不必强行发版。
 
