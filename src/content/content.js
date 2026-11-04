@@ -797,6 +797,8 @@
     课程: "course",
     直播: "live",
     广告: "ad",
+    推广: "promo",
+    赞助: "promo",
   };
 
   /** 从卡面角标认类别。只扫有限数量的叶子节点，守住扫描耗时。 */
@@ -823,6 +825,16 @@
     if (!unit || !unit.querySelector) return "video";
     const byBadge = badgeKind(unit);
     if (byBadge) return byBadge;
+    // 商业推广卡：B 站用它自己的打点域 cm.bilibili.com 做曝光/点击上报，
+    // 卡片里的链接或 data-* 属性会指向 https://cm.bilibili.com/cm/api/fees/pc/sync…
+    // 这是用户实测给的判据，比 class 名稳。
+    if (
+      unit.querySelector(
+        '[href*="cm.bilibili.com"], [data-href*="cm.bilibili.com"], [data-url*="cm.bilibili.com"], [data-click-url*="cm.bilibili.com"], img[alt*="推广"], [title*="推广"]',
+      )
+    ) {
+      return "promo";
+    }
     if (unit.querySelector('a[href*="manga.bilibili.com"]')) return "manga";
     if (unit.querySelector('a[href*="live.bilibili.com"]')) return "live";
     if (unit.querySelector('a[href*="/cheese/play/"]')) return "course";

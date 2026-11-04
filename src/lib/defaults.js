@@ -66,6 +66,7 @@ export const DEFAULT_SETTINGS = {
       live: false,
       esports: false,
       ad: false,
+      promo: false,
     },
   },
 };
@@ -78,6 +79,7 @@ export const HOME_CATEGORIES = [
   { key: "live", label: "直播", hint: "链接到 live.bilibili.com 的直播间卡片" },
   { key: "esports", label: "赛事", hint: "卡面带「赛事」角标的卡片（它的链接其实是普通视频页，只能靠角标认）" },
   { key: "ad", label: "广告", hint: "带「广告」标记的推广卡" },
+  { key: "promo", label: "推广 / 商业推广", hint: "链接或属性里带 cm.bilibili.com（B 站商业推广的打点域），或卡面带「推广 / 赞助」字样" },
 ];
 
 export const DEFAULT_STATS = {

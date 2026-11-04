@@ -148,11 +148,13 @@ LICENSE                   MIT
 
 二是**链接指向**：`manga.bilibili.com` → 漫画、`live.bilibili.com` → 直播、`/cheese/play/` → 课程、`/v/game/match` 或 `/v/esports` → 赛事、`/bangumi/play/` → 番剧或影视（链接形状一样，靠卡面文案区分，所以 movie 必须排在 bangumi 前面）。
 
+三是**商业推广打点域**：推广卡（卡面标「推广 / 赞助」）不一定带 `ad-report` 这类 class，也不一定有角标文本，但卡片里的链接或 `data-*` 属性会指向 `https://cm.bilibili.com/cm/api/fees/pc/sync…`——这是用户实测给的判据，比 class 名稳。所以 `promo` 类别先扫 `[href*="cm.bilibili.com"], [data-href*="cm.bilibili.com"], [data-url*="cm.bilibili.com"], [data-click-url*="cm.bilibili.com"], img[alt*="推广"], [title*="推广"]`，再把角标词表里的「推广 / 赞助」也归到 `promo`。【注：开发时手上只有未登录 profile，推荐流里一条推广卡都没出现（全页只有一处 `//cm.bilibili.com` 链接），所以这条主要靠用户提供的域名证据，用注入的假卡片做确定性测试。日后如果在真页面上发现它还有别的打点域，补进那个选择器即可。】
+
 元数据里的类别（`goto`）不可靠：`ingestRelated` 只收 bvid 条目，番剧/直播/漫画本来就进不来。开关语义是「勾上 = 不显示」，默认全关。
 
 **主站的额外请求默认关。** `settings.home.remote` 默认为 `false`，与播放页的 `remoteEnabled`（默认 true）分开：首页会无限滚动、卡片没有上限，开一次就可能把单页预算吃光。开启后也只给视口上下 300px 内的卡片发请求（`nearViewport()`），不在范围内的卡片**不标记完成**，滚回来时 `scroll` 监听会再扫一次。
 
-**测试是独立的。** `npm run home`（18 项）真实打开首页，守的是这六条：首屏不等接口就有候选、标题不是「不感兴趣」、规则能过滤、被藏的是外层 wrapper、类别开关能开能关、`home.remote=false` 时零额外请求。播放页那套 `npm run e2e` 断言（右侧列表、related 元数据）在首页完全不适用，不要强行复用。
+**测试是独立的。** `npm run home`（24 项）真实打开首页，守的是这六条：首屏不等接口就有候选、标题不是「不感兴趣」、规则能过滤、被藏的是外层 wrapper、类别开关能开能关（含注入的漫画/赛事/推广假卡片）、`home.remote=false` 时零额外请求。播放页那套 `npm run e2e` 断言（右侧列表、related 元数据）在首页完全不适用，不要强行复用。
 
 ## 关键词为什么「加了却不过滤」
 

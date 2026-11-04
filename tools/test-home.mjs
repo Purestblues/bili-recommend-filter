@@ -249,7 +249,7 @@ await setSettings({ home: { enabled: true } });
 await sleep(1200);
 
 section("7. 类别开关");
-const ALL_CATS = { bangumi: true, movie: true, manga: true, course: true, live: true, esports: true, ad: true };
+const ALL_CATS = { bangumi: true, movie: true, manga: true, course: true, live: true, esports: true, ad: true, promo: true };
 await setSettings({ home: { hide: ALL_CATS } });
 await sleep(3000);
 const cat = await contentState();
@@ -263,7 +263,7 @@ if (cat && cat.categoriesHidden > 0) {
 // 漫画和赛事卡不一定出现在推荐流里，所以注入两张角标卡做确定性验证。
 // 这两类的链接分别可能是 manga.bilibili.com 和普通视频页（实测赛事卡指向 BV…），
 // 所以判定必须靠卡面角标文案，这里守的就是这条。
-section("7b. 漫画 / 赛事角标卡（注入假卡片）");
+section("7b. 角标卡与推广卡（注入假卡片）");
 const INJECT = `(() => {
   const cards = [...document.querySelectorAll('.bili-video-card')];
   const cnt = new Map();
@@ -274,21 +274,24 @@ const INJECT = `(() => {
   const best = [...cnt.entries()].sort((a, b) => b[1] - a[1])[0];
   const root = best ? best[0] : document.body;
   document.querySelectorAll('[data-brf-fake]').forEach(e => e.remove());
-  const make = (label, href) => {
+  const make = (label, href, withBadge) => {
     const d = document.createElement('div');
     d.className = 'floor-card single-card';
-    d.setAttribute('data-brf-fake', label);
+    d.setAttribute('data-brf-fake', label || 'promo-link');
     d.style.height = '210px';
     d.innerHTML = '<a href="' + href + '"><div class="cover-container" style="height:150px"></div></a>' +
-                  '<div class="badge"><span class="floor-title">' + label + '</span></div>';
+      (withBadge ? '<div class="badge"><span class="floor-title">' + label + '</span></div>' : '');
     return d;
   };
-  root.appendChild(make('漫画', 'https://manga.bilibili.com/detail/mc34254'));
-  root.appendChild(make('赛事', 'https://www.bilibili.com/video/BV1T8xm6EEqi/'));
-  return { rootCls: String(root.className).slice(0, 40), injected: 2 };
+  root.appendChild(make('漫画', 'https://manga.bilibili.com/detail/mc34254', true));
+  root.appendChild(make('赛事', 'https://www.bilibili.com/video/BV1T8xm6EEqi/', true));
+  root.appendChild(make('推广', 'https://www.bilibili.com/video/BV1T8xm6EEqi/', true));
+  // 没有角标、只有 cm.bilibili.com 打点链接的商业推广卡
+  root.appendChild(make('', 'https://cm.bilibili.com/cm/api/fees/pc/sync?ad_id=1', false));
+  return { rootCls: String(root.className).slice(0, 40), injected: 4 };
 })()`;
 const inj = await homeEval(INJECT);
-check("假卡片已注入列表容器", inj && inj.injected === 2, JSON.stringify(inj));
+check("假卡片已注入列表容器", inj && inj.injected === 4, JSON.stringify(inj));
 await sleep(2500);
 const FAKE_STATE = `(() => [...document.querySelectorAll('[data-brf-fake]')].map(e => ({
   label: e.getAttribute('data-brf-fake'),
@@ -297,15 +300,16 @@ const FAKE_STATE = `(() => [...document.querySelectorAll('[data-brf-fake]')].map
 let fakes = await homeEval(FAKE_STATE);
 check("漫画角标卡被隐藏", fakes.some((f) => f.label === "漫画" && f.hidden), JSON.stringify(fakes));
 check("赛事角标卡被隐藏", fakes.some((f) => f.label === "赛事" && f.hidden), JSON.stringify(fakes));
+check("「推广」角标卡被隐藏", fakes.some((f) => f.label === "推广" && f.hidden), JSON.stringify(fakes));
+check("只带 cm.bilibili.com 链接的推广卡被隐藏", fakes.some((f) => f.label === "promo-link" && f.hidden), JSON.stringify(fakes));
 
-await setSettings({ home: { hide: { manga: false, esports: false } } });
+await setSettings({ home: { hide: { manga: false, esports: false, promo: false } } });
 await sleep(2500);
 fakes = await homeEval(FAKE_STATE);
-check("取消后假卡片恢复显示", fakes.length === 2 && fakes.every((f) => !f.hidden), JSON.stringify(fakes));
+check("取消后假卡片恢复显示", fakes.length === 4 && fakes.every((f) => !f.hidden), JSON.stringify(fakes));
 await homeEval(`document.querySelectorAll('[data-brf-fake]').forEach(e => e.remove()); true`);
 
-await setSettings({ home: { hide: { bangumi: false, movie: false, course: false, live: false, ad: false } } });
-await sleep(2000);
+await setSettings({ home: { hide: { bangumi: false, movie: false, course: false, live: false, ad: false } } });await sleep(2000);
 const catOff = await contentState();
 check("取消类别后恢复", catOff && catOff.categoriesHidden === 0, JSON.stringify(catOff));
 
