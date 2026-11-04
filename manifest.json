@@ -1,0 +1,77 @@
+{
+  "manifest_version": 3,
+  "name": "B站推荐过滤 · Bili Recommend Filter",
+  "version": "0.1.8",
+  "description": "按时长、播放量、点赞率、标题/UP/标签关键词、UP主投稿频率过滤 B 站播放页右侧推荐视频。",
+  "minimum_chrome_version": "111",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://api.bilibili.com/*",
+    "https://www.bilibili.com/*",
+    "https://space.bilibili.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background/sw.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "B站推荐过滤",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "32": "assets/icon32.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/list/*"
+      ],
+      "js": [
+        "src/content/inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/list/*"
+      ],
+      "js": [
+        "src/content/content.js"
+      ],
+      "css": [
+        "src/content/content.css"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/lib/rules.js",
+        "src/lib/metrics.js"
+      ],
+      "matches": [
+        "https://www.bilibili.com/*"
+      ]
+    }
+  ]
+}

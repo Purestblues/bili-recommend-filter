@@ -1,0 +1,255 @@
+/* 只作用于扩展自己创建的节点，不碰 B 站原有样式 */
+
+.brf-pending {
+  visibility: hidden !important;
+}
+
+.brf-hidden {
+  display: none !important;
+}
+
+/* ---------------- 悬浮工具栏 ----------------
+   收起态：两个小图标，贴在卡片右下角，不挡封面和标题
+   展开态：完整面板，从卡片位置铺开
+*/
+
+.brf-toolbar {
+  position: fixed;
+  z-index: 2147483000;
+  display: none;
+  flex-direction: column;
+  gap: 7px;
+  width: auto;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(24, 24, 27, 0.62);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #fff;
+  backdrop-filter: blur(4px);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.brf-toolbar--on {
+  display: flex;
+}
+
+.brf-toolbar--on:hover {
+  background: rgba(24, 24, 27, 0.92);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+}
+
+/* 展开态：变宽、变实，遮住内容也没关系 */
+.brf-toolbar--open {
+  width: 440px;
+  max-width: calc(100vw - 20px);
+  padding: 9px;
+  gap: 8px;
+  background: rgba(24, 24, 27, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+}
+
+/* ---------------- 收起态的两个小图标 ---------------- */
+
+.brf-mini {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.brf-toolbar--open .brf-mini {
+  display: none;
+}
+
+.brf-icon {
+  all: unset;
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 14px;
+  line-height: 24px;
+  text-align: center;
+  transition: background 0.12s, color 0.12s;
+  user-select: none;
+}
+
+.brf-icon:hover {
+  background: #fb7299;
+  color: #fff;
+}
+
+.brf-icon--close {
+  font-size: 12px;
+  margin-left: auto;
+}
+
+/* ---------------- 展开面板 ---------------- */
+
+.brf-editor {
+  display: none;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.brf-toolbar--open .brf-editor {
+  display: flex;
+}
+
+.brf-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brf-editor-label {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.brf-title {
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.5;
+  max-height: 34px;
+  overflow-y: auto;
+  word-break: break-all;
+}
+
+.brf-chars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 104px;
+  overflow-y: auto;
+}
+
+.brf-chars-empty {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11.5px;
+}
+
+.brf-char {
+  all: unset;
+  cursor: pointer;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font-size: 13px;
+  line-height: 22px;
+  text-align: center;
+  transition: background 0.12s, transform 0.12s;
+  user-select: none;
+}
+
+.brf-char:hover {
+  background: #fb7299;
+}
+
+.brf-char:active {
+  transform: scale(0.92);
+}
+
+.brf-char--space {
+  min-width: 16px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+}
+
+.brf-char--punct {
+  color: #fbbf24;
+}
+
+.brf-inputwrap {
+  display: flex;
+}
+
+.brf-input {
+  all: unset;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fff;
+  color: #18181b;
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.brf-input::placeholder {
+  color: #9ca3af;
+}
+
+/* ---------------- 关键词预览 ---------------- */
+
+.brf-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 18px;
+  max-height: 76px;
+  overflow-y: auto;
+}
+
+.brf-preview-empty {
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 11.5px;
+}
+
+.brf-chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(251, 114, 153, 0.22);
+  color: #fbcfe0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.brf-chip--space {
+  background: rgba(96, 165, 250, 0.22);
+  color: #bfdbfe;
+}
+
+.brf-chip--warn {
+  background: rgba(251, 191, 36, 0.22);
+  color: #fde68a;
+}
+
+.brf-warn {
+  flex: 1 0 100%;
+  color: #fbbf24;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ---------------- 提示（悬在小图标上方，不撑宽工具栏） ---------------- */
+
+.brf-tip {
+  display: none;
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 5px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: rgba(24, 24, 27, 0.95);
+  color: #4ade80;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.brf-tip--on {
+  display: block;
+}

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <img src="../../assets/icon32.png" alt="" width="20" height="20" />
+    <span class="name">B站推荐过滤</span>
+    <label class="switch" title="总开关">
+      <input type="checkbox" id="enabled" />
+    </label>
+  </header>
+
+  <section class="page-state" id="pageState">
+    <div class="state-line" id="stateLine">正在读取当前页…</div>
+    <div class="metrics">
+      <div class="m"><b id="mScanned">–</b><span>推荐条数</span></div>
+      <div class="m"><b id="mFiltered">–</b><span>已过滤</span></div>
+      <div class="m"><b id="mRemote">–</b><span>额外请求</span></div>
+    </div>
+  </section>
+
+  <section class="hits">
+    <div class="hits-head">
+      <span>本页命中</span>
+      <button class="link" id="rescan">重新扫描</button>
+    </div>
+    <ul id="hitList"></ul>
+    <p class="empty" id="hitEmpty">本页还没有过滤任何推荐。</p>
+  </section>
+
+  <footer>
+    <button class="link" id="openOptions">设置规则</button>
+    <span class="dot">·</span>
+    <span id="ruleCount" class="muted">0 条规则</span>
+  </footer>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

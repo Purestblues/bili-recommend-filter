@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>B站推荐过滤 · 设置</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="../../assets/icon48.png" alt="" width="28" height="28" />
+      <div>
+        <h1>B站推荐过滤</h1>
+        <p class="sub">过滤视频播放页右侧「接下来播放」的推荐内容</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <label class="switch">
+        <input type="checkbox" id="masterEnabled" />
+        <span>总开关</span>
+      </label>
+      <span id="saveState" class="save-state">已保存</span>
+      <button class="btn btn-primary save-btn" id="saveNow" title="把当前所有修改立即写入并生效（Ctrl+S）">
+        保存
+      </button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab is-active" data-tab="rules">过滤规则</button>
+    <button class="tab" data-tab="keywords">批量关键词</button>
+    <button class="tab" data-tab="lists">白名单 / 黑名单</button>
+    <button class="tab" data-tab="presets">预设规则包</button>
+    <button class="tab" data-tab="advanced">高级</button>
+    <button class="tab" data-tab="log">命中日志</button>
+  </nav>
+
+  <main>
+    <!-- 规则 -->
+    <section class="panel is-active" id="panel-rules">
+      <div class="panel-head">
+        <div>
+          <h2>过滤规则</h2>
+          <p class="hint">
+            规则之间是「任一命中即过滤」。所有规则的优先级都低于白名单。数值型规则的阈值单位见下拉框右侧。
+          </p>
+        </div>
+        <button class="btn btn-primary" id="addRule">+ 添加规则</button>
+      </div>
+      <div class="table-wrap">
+        <table class="rules">
+          <thead>
+            <tr>
+              <th class="col-on">启用</th>
+              <th class="col-metric">指标</th>
+              <th class="col-op">条件</th>
+              <th class="col-value">阈值 / 关键词</th>
+              <th class="col-note">备注</th>
+              <th class="col-del"></th>
+            </tr>
+          </thead>
+          <tbody id="ruleRows"></tbody>
+        </table>
+        <p class="empty" id="rulesEmpty">还没有任何规则。点右上角「添加规则」，或去「预设规则包」一键导入一套。</p>
+      </div>
+      <div class="footer-note">
+        <strong>提示：</strong>互动率（点赞率/投币率等）在播放量低于「高级 → 互动率最小样本」时视为不可信，不参与判定，
+        避免把刚发布的小播放量视频误判成低质。
+      </div>
+    </section>
+
+    <!-- 批量关键词 -->
+    <section class="panel" id="panel-keywords">
+      <div class="panel-head">
+        <div>
+          <h2>批量关键词</h2>
+          <p class="hint">一行一个词，也可以用逗号、顿号、分号分隔。粘贴一大段进去会自动切分去重。不区分大小写。</p>
+        </div>
+      </div>
+
+      <div class="kw-grid">
+        <div class="kw-card">
+          <h3>标题关键词</h3>
+          <p class="hint">标题里出现任意一个词 → 过滤</p>
+          <textarea id="kwTitle" rows="8" placeholder="AI批量&#10;日更&#10;一键生成"></textarea>
+          <div class="kw-preview" id="kwTitlePreview"></div>
+          <div class="kw-foot"><span id="kwTitleCount">0 个词</span></div>
+        </div>
+        <div class="kw-card">
+          <h3>UP主名关键词</h3>
+          <p class="hint">UP 主昵称里出现任意一个词 → 过滤</p>
+          <textarea id="kwUp" rows="8" placeholder="搬运&#10;合集"></textarea>
+          <div class="kw-preview" id="kwUpPreview"></div>
+          <div class="kw-foot"><span id="kwUpCount">0 个词</span></div>
+        </div>
+        <div class="kw-card">
+          <h3>标签关键词 <span class="badge-remote">需额外请求</span></h3>
+          <p class="hint">视频标签里出现任意一个词 → 过滤（每条视频一次请求，有缓存）</p>
+          <textarea id="kwTag" rows="8" placeholder="AI生成&#10;纯AI"></textarea>
+          <div class="kw-preview" id="kwTagPreview"></div>
+          <div class="kw-foot"><span id="kwTagCount">0 个词</span></div>
+        </div>
+      </div>
+      <div class="footer-note">
+        这三组词分别对应规则表里的一条「包含任意」规则。在规则表里也能改，两边是同一份数据。
+      </div>
+    </section>
+
+    <!-- 白名单 / 黑名单 -->
+    <section class="panel" id="panel-lists">
+      <div class="panel-head">
+        <div>
+          <h2>白名单 / 黑名单</h2>
+          <p class="hint">白名单优先级最高：命中的视频永远不会被过滤。黑名单 UP 优先级仅次于白名单，一键屏蔽就存在这里。</p>
+        </div>
+      </div>
+
+      <div class="lists">
+        <div class="list-card">
+          <h3>白名单 · UP 主 mid</h3>
+          <p class="hint">一行一个数字 mid，最精确</p>
+          <textarea id="wlMids" rows="5" placeholder="12345678"></textarea>
+        </div>
+        <div class="list-card">
+          <h3>白名单 · UP 主名</h3>
+          <p class="hint">一行一个名字片段</p>
+          <textarea id="wlNames" rows="5" placeholder="影视飓风"></textarea>
+        </div>
+        <div class="list-card">
+          <h3>白名单 · 标题词</h3>
+          <p class="hint">标题含这些词就放行</p>
+          <textarea id="wlTitles" rows="5"></textarea>
+        </div>
+        <div class="list-card">
+          <h3>白名单 · 标签词</h3>
+          <p class="hint">标签含这些词就放行</p>
+          <textarea id="wlTags" rows="5"></textarea>
+        </div>
+        <div class="list-card list-card--wide">
+          <h3>黑名单 · 已屏蔽的 UP</h3>
+          <p class="hint">在播放页卡片上点「屏蔽此UP」会加到这两个列表。mid 一行一个，名字一行一个。</p>
+          <div class="two-col">
+            <textarea id="blMids" rows="6" placeholder="mid，一行一个"></textarea>
+            <textarea id="blNames" rows="6" placeholder="名字，一行一个"></textarea>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 预设 -->
+    <section class="panel" id="panel-presets">
+      <div class="panel-head">
+        <div>
+          <h2>预设规则包</h2>
+          <p class="hint">点「导入」会把预设展开成普通规则追加进规则表，之后可以随意改、随意删。重复的规则不会重复导入。</p>
+        </div>
+      </div>
+      <div class="preset-grid" id="presetGrid"></div>
+    </section>
+
+    <!-- 高级 -->
+    <section class="panel" id="panel-advanced">
+      <div class="panel-head">
+        <div>
+          <h2>高级</h2>
+          <p class="hint">这些开关影响性能与风控风险，不确定就保持默认。</p>
+        </div>
+      </div>
+
+      <div class="form">
+        <div class="field">
+          <label>命中后的处理</label>
+          <select id="action">
+            <option value="hide">隐藏（推荐：列表自动上移，不影响页面和播放器）</option>
+            <option value="remove">彻底删除节点（不推荐：可能触发页面重新渲染）</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="check"><input type="checkbox" id="remoteEnabled" /> 允许额外请求 B 站接口</label>
+          <p class="hint">关闭后「标签关键词」和「UP主投稿频率」规则完全不生效，只用接口自带字段判定，零额外请求。</p>
+        </div>
+
+        <div class="field">
+          <label>每页最多额外请求数</label>
+          <input type="number" id="maxRemotePerPage" min="0" max="200" />
+          <p class="hint">一个播放页右侧约 40 条推荐，标签需要逐条请求，UP 频率按 UP 去重。调低可以显著降低风控风险，代价是部分卡片判定为「未知」而放行。</p>
+        </div>
+
+        <div class="field">
+          <label>互动率最小播放量样本</label>
+          <input type="number" id="likeRateMinView" min="0" max="1000000" step="100" />
+          <p class="hint">播放量低于此值时，点赞率/投币率等视为不可信，不参与判定。</p>
+        </div>
+
+        <div class="field">
+          <label class="check"><input type="checkbox" id="quickButtons" /> 在推荐卡片上显示快捷按钮</label>
+          <p class="hint">鼠标移到卡片上出现「屏蔽此UP」「标题词+」。</p>
+        </div>
+
+        <div class="field">
+          <label>命中日志保留条数</label>
+          <input type="number" id="logLimit" min="20" max="2000" step="10" />
+        </div>
+
+        <div class="field field--wide">
+          <label>配置备份 / 迁移</label>
+          <p class="hint">
+            导出会把规则、批量关键词、白名单、黑名单和高级设置一起存成一个 JSON 文件，方便备份或换电脑时迁移。
+            导入会<strong>覆盖</strong>当前全部配置，导入前会再确认一次。
+          </p>
+          <div class="row">
+            <button class="btn btn-primary" id="btnExportFile">导出到文件</button>
+            <button class="btn" id="btnImportFile">从文件导入</button>
+            <input type="file" id="fileInput" accept="application/json,.json" hidden />
+            <button class="btn" id="btnExport">导出到文本框</button>
+            <button class="btn" id="btnImport">从文本框导入</button>
+            <button class="btn btn-danger" id="btnReset">恢复默认设置</button>
+          </div>
+          <textarea id="jsonBox" rows="6" placeholder="点「导出到文本框」把当前配置放到这里，或粘贴一份配置后点「从文本框导入」"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- 日志 -->
+    <section class="panel" id="panel-log">
+      <div class="panel-head">
+        <div>
+          <h2>命中日志</h2>
+          <p class="hint">最近被过滤的视频与命中原因。调规则时主要看这里，避免盲调。</p>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnRefreshLog">刷新</button>
+          <button class="btn btn-danger" id="btnClearLog">清空</button>
+        </div>
+      </div>
+      <div class="stats" id="statsBox"></div>
+      <div class="table-wrap">
+        <table class="log-table">
+          <thead>
+            <tr><th>时间</th><th>标题</th><th>UP主</th><th>命中原因</th></tr>
+          </thead>
+          <tbody id="logRows"></tbody>
+        </table>
+        <p class="empty" id="logEmpty">还没有命中记录。</p>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>
