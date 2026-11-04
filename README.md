@@ -186,6 +186,7 @@ npm run popup    # popup 命中列表的标题链接（9 项）
 npm run backup   # 导出/导入本地文件（17 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
 npm run verify   # WBI 签名与接口连通性专项检查
+npm run pack     # 打发布 zip 到 out/bili-recommend-filter-<版本>.zip
 ```
 
 除了 `npm test` 和 `npm run check`，其余脚本都会启动一个真实的 headless Chrome 并通过 CDP 加载本扩展。它们会自己找 Chrome（Windows 注册目录、macOS `/Applications`、Linux `/usr/bin` 与 PATH 都会试），找不到或者你想指定别的浏览器（Edge、Chromium 也行）就设环境变量：

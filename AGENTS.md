@@ -19,7 +19,7 @@ npm run picker  # 标题拆字选词（23 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
 ```
 
-`npm run verify` 是 WBI 签名与接口连通性的专项检查，改了 wbi.js 或 sw.js 的请求层时跑。
+`npm run verify` 是 WBI 签名与接口连通性的专项检查，改了 wbi.js 或 sw.js 的请求层时跑。`npm run pack` 打发布 zip（见下方「发版」）。
 
 仓库是公开的（MIT），提交前自己过一遍：不能有密钥 / cookie / token，不能有个人 mid 或真实姓名的测试配置，不能有本机绝对路径（`D:/Projects/...`、`C:/Users/你的名字/...`）。脚本里要找浏览器可执行文件一律用 `tools/chrome.mjs` 的 `chromeExecutable()`，不要在 spawn 里写死路径——那样只有你这台机器能跑。截图改了要同步 `docs/screenshots/`，那是 README 直接引用的副本。
 
@@ -54,6 +54,7 @@ tools/
   test-titlepicker.mjs     标题拆字选词 → 逗号切分 → 提交（23 项）
   test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底（8 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
+  pack.mjs                 打发布 zip（out/bili-recommend-filter-<版本>.zip），自实现 ZIP 写入，零依赖
   cdp.mjs                  极简 CDP 客户端（无依赖）
   verify-wbi.mjs           md5 + 签名 + 接口真实连通性
   shot.mjs / shot-toolbar.mjs  设置页与快捷按钮的截图脚本（输出到 out/）
@@ -154,3 +155,18 @@ B 站若改成虚拟列表（复用 DOM 节点），需要给卡片加 bvid 标�
 E2E 脚本有三个坑已经踩过，不要退回旧写法：headless 下 `--load-extension` 在 Chrome 137+ 已失效，必须 `--enable-unsafe-extension-debugging` + CDP `Extensions.loadUnpacked`；`chrome.storage` 只在扩展页面里存在，读写设置要走一个常驻的 options 页目标；`chrome.tabs.sendMessage` 只能在扩展上下文里调用。
 
 连续跑 E2E 会把本机 IP 打进 B 站 `-412` 风控冷却（每个页面最多几十个请求）。所以 E2E 里远程规则的断言是自适应的：接口可用就验证「能过滤」，不可用就验证「不误杀」。两件事都得是绿的。
+
+## 发版
+
+顺序不能乱，前一步不绿就不要往下走：
+
+1. 改 `manifest.json` 和 `package.json` 的 `version`，两处必须一致（`npm run pack` 会检查，不一致直接退出码 2）
+2. `npm test`、`npm run check` 全绿；有条件再跑一次 `npm run e2e`
+3. `npm run pack` → 产出 `out/bili-recommend-filter-<版本>.zip`，24 个文件、manifest 在 zip 根目录
+4. 用 zip 里的内容实际载入一次：解压 → `chrome://extensions` → 「加载已解压的扩展程序」→ 打开任意播放页看过滤是否正常
+5. 提交并打 tag：`git tag v<版本>`、`git push origin main --tags`
+6. 建 Release 并附上 zip：`gh release create v<版本> out/bili-recommend-filter-<版本>.zip --title "..." --notes "..."`
+
+版本号同时也是 Chrome 认的那个版本（`chrome://extensions` 卡片上显示的就是它），所以只改了边角代码但功能无变化时，不必强行发版。
+
+打包脚本自己写 ZIP 字节而不调用 `zip` / `Compress-Archive`：前者不一定装，后者只有 Windows 有。改它的时候用 `unzip -l` 或 .NET 的 `ZipFile.OpenRead` 验一遍能读、能解压、`manifest.json` 在根目录。
