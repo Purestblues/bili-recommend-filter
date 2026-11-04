@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "B站推荐过滤 · Bili Recommend Filter",
-  "version": "0.1.8",
-  "description": "按时长、播放量、点赞率、标题/UP/标签关键词、UP主投稿频率过滤 B 站播放页右侧推荐视频。",
+  "version": "0.2.0",
+  "description": "按时长、播放量、点赞率、标题/UP/标签关键词、UP主投稿频率过滤 B 站播放页右侧推荐与首页推荐流。",
   "minimum_chrome_version": "111",
   "permissions": [
     "storage",
@@ -41,7 +41,10 @@
     {
       "matches": [
         "https://www.bilibili.com/video/*",
-        "https://www.bilibili.com/list/*"
+        "https://www.bilibili.com/list/*",
+        "https://www.bilibili.com/",
+        "https://www.bilibili.com/?*",
+        "https://www.bilibili.com/index.html"
       ],
       "js": [
         "src/content/inject.js"
@@ -52,7 +55,10 @@
     {
       "matches": [
         "https://www.bilibili.com/video/*",
-        "https://www.bilibili.com/list/*"
+        "https://www.bilibili.com/list/*",
+        "https://www.bilibili.com/",
+        "https://www.bilibili.com/?*",
+        "https://www.bilibili.com/index.html"
       ],
       "js": [
         "src/content/content.js"

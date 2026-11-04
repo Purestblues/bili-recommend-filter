@@ -1,6 +1,6 @@
 # AGENTS.md · B站推荐过滤扩展
 
-Chrome MV3 扩展，过滤 B 站视频播放页右侧「接下来播放」推荐区。纯原生 JS，零依赖、零构建。
+Chrome MV3 扩展，过滤 B 站视频播放页右侧「接下来播放」推荐区，以及主站首页的推荐流。纯原生 JS，零依赖、零构建。
 
 ## 维护规则
 
@@ -17,6 +17,7 @@ npm run popup   # popup 命中列表的标题链接（9 项）
 npm run save    # 保存可靠性：点保存/切走/关浏览器重启（13 项）
 npm run picker  # 标题拆字选词（23 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
+npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（18 项，需要联网）
 ```
 
 `npm run verify` 是 WBI 签名与接口连通性的专项检查，改了 wbi.js 或 sw.js 的请求层时跑。`npm run pack` 打发布 zip（见下方「发版」）。
@@ -53,6 +54,7 @@ tools/
   test-save.mjs            保存可靠性：点保存/切走/重启（13 项）
   test-titlepicker.mjs     标题拆字选词 → 逗号切分 → 提交（23 项）
   test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底（8 项）
+  test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（18 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
   pack.mjs                 打发布 zip（out/bili-recommend-filter-<版本>.zip），自实现 ZIP 写入，零依赖
   cdp.mjs                  极简 CDP 客户端（无依赖）
@@ -124,6 +126,28 @@ LICENSE                   MIT
 
 **设置代际（state.gen）不能删。** 判定是异步的（要 await 动态 import 和远程请求）。如果设置在中途变了，正在跑的判定必须作废（`if (gen !== state.gen) return;`），否则会出现「旧设置算到一半 → 新设置到达 → 卡片被标记已完成 → 永不重判」的 bug。这个 bug 曾经让 20 条里只过滤掉 13 条。
 
+## 主站首页（第二个页面形态）
+
+除播放页外，`https://www.bilibili.com/` 首页也支持过滤（v0.2.0 起）。以下是踩过的坑，改这块之前必读。
+
+**首页地址会被改写成 `/index.html`。** 实测：打开 `https://www.bilibili.com/`，页面客户端路由会把它改成 `https://www.bilibili.com/index.html` 并做一次导航。所以 manifest 里三个 pattern 都得有：`https://www.bilibili.com/`、`https://www.bilibili.com/?*`（带 query 的首页）、`https://www.bilibili.com/index.html`；`isHomePage()` 也把这三个形态都算首页。少写一个的表现是「首屏能过滤，滚一下就全部失效、消息发不进去」（Receiving end does not exist）。
+
+**首页没有 `__INITIAL_STATE__`。** 抓整页 HTML 实测：`__INITIAL_STATE__` 出现 0 次，`"bvid"` 出现 0 次，服务端只预渲染了 10 张卡片（`bili-video-card is-rcmd`），其余全靠接口。但 feed 接口 `/x/web-interface/wbi/index/top/feed/rcmd` 返回的 `data.item[]` 与播放页 related **字段同构**（`bvid` / `duration` / `pubdate` / `owner{mid,name}` / `stat{view,like,danmaku}`），而 `inject.js` 的 `WATCHED` 早就写了这个 endpoint、`extractItems` 也会读 `data.item`。所以元数据链路不需要为首页写任何新代码。
+
+**列表容器不能靠 class 名。** `RECO_ROOTS` 在首页一个都不匹配。现行做法在 `learnHomeRoot()`：按「祖先链签名」（每层标签名 + 首个 class）给 anchor 分组，取最大的一组求最深公共祖先。每个 anchor 只读 6 层属性，不做子树遍历——这是为了守住性能红线，全页 `querySelectorAll` 在首页上会直接把主线程卡死。
+
+**整行被过滤时必须连外层 wrapper 一起藏。** 实测数据（1600×1100 视口，五列网格，x = 140/400/660/919/1179）：只藏 `.bili-video-card`，那一行视觉上消失但**下面所有行原地不动**，留下 210px 空洞；藏掉它的外层 wrapper，下一行立刻上移 270px 补位；只藏行中间一张时，同行剩下的卡片正常左移。逻辑在 `collapseTarget()`：向上找「高度与卡片几乎一致、只含这一个 bvid、子元素不多」的祖先，最多爬两层。播放页卡片直接挂在列表容器下，循环第一次就退出。
+
+**标题兜底在首页会抓错元素。** `readCardFallback()` 里用 `querySelector('[class*="title"]')` 在首页命中的第一个元素是 `span.no-interest-title`，内容就是「不感兴趣」——标题关键词规则全部失效。现在按可靠度排序：`h3[class*="tit"]` → `[class*="info--tit"]` → `h3` → `a[href*="/video/BV"][title]` → `[class*="title"]`，并排掉 `no-interest / mask / tooltip / hover / skeleton / placeholder` 这些装饰元素。
+
+**骨架卡不能打 done 标记。** 首页卡片先占位再填内容，骨架阶段没有标题和时长。如果把它当候选判成「通过」并写上 `data-brf-done="1"`，真实数据到了也不会重判。现在 `dedupeByCard()` 会跳过「没有元数据且 innerText 少于 2 个字符」的卡片，等它渲染出来再纳入候选。
+
+**番剧/影视/课程/直播/广告卡没有 bvid**，走不了规则引擎（也没有 stat 和 duration），所以只能按类别整类隐藏（`applyCategoryToggles()`）。类别判定只看链接：`live.bilibili.com` → 直播、`/cheese/play/` → 课程、`/bangumi/play/` → 番剧或影视，两者链接形状一样，靠卡面标记文案（电影 / 影视 / 纪录片 / 片单）区分，因此 **movie 必须排在 bangumi 前面**。开关是「勾上 = 不显示」，默认全关。
+
+**主站的额外请求默认关。** `settings.home.remote` 默认为 `false`，与播放页的 `remoteEnabled`（默认 true）分开：首页会无限滚动、卡片没有上限，开一次就可能把单页预算吃光。开启后也只给视口上下 300px 内的卡片发请求（`nearViewport()`），不在范围内的卡片**不标记完成**，滚回来时 `scroll` 监听会再扫一次。
+
+**测试是独立的。** `npm run home`（18 项）真实打开首页，守的是这六条：首屏不等接口就有候选、标题不是「不感兴趣」、规则能过滤、被藏的是外层 wrapper、类别开关能开能关、`home.remote=false` 时零额外请求。播放页那套 `npm run e2e` 断言（右侧列表、related 元数据）在首页完全不适用，不要强行复用。
+
 ## 关键词为什么「加了却不过滤」
 
 两类原因，都已经修了，别再退回去：
@@ -144,7 +168,9 @@ LICENSE                   MIT
 
 卡片文本的播放量解析在 `rules.js` 的 `extractViewFromText()`，按可靠度分四级：带「播放」字样 → 裸数字带万/亿 → 卡片末尾「播放量 弹幕数」两个数字取倒数第二个 → 都失败返回 null。小于一万的播放量在 DOM 里是纯数字（「606」「4368」），不带「万」也不带「播放」，只能靠位置认，所以第三条要求文本里必须有时长串（确认是视频卡片）。这套逻辑有 22 项单测。
 
-DOM 适配集中在 `content.js` 的 `findCardRoot()` / `plausibleCard()` / `readCardFallback()`；数据来源集中在 `inject.js` 的 `readInitialState()`（SSR 路径）和 `WATCHED` 正则（接口路径）；接口集中在 `sw.js` 的 `ENDPOINTS`。B 站改版时按这个顺序查。
+DOM 适配集中在 `content.js` 的 `findCardRoot()` / `plausibleCard()` / `readCardFallback()`（两个页面共用）；首页额外靠 `learnHomeRoot()` / `collapseTarget()` / `classifyCard()`；数据来源集中在 `inject.js` 的 `readInitialState()`（SSR 路径）和 `WATCHED` 正则（接口路径，已覆盖首页 feed）；接口集中在 `sw.js` 的 `ENDPOINTS`。B 站改版时按这个顺序查。
+
+首页的三个具体脆弱点：地址可能再变（已经踩过一次 `/` → `/index.html`）、卡面类别标记文案可能变（`classifyCard()` 靠「电影/影视/纪录片/片单」区分影视与番剧）、网格层级可能变（`collapseTarget()` 依赖「卡片外层有一层等高 wrapper」这个结构事实）。
 
 B 站若改成虚拟列表（复用 DOM 节点），需要给卡片加 bvid 标记避免重复处理。
 

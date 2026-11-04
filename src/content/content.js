@@ -22,6 +22,13 @@
     "[class*='recommend-list']",
   ];
 
+  // 主站首页。B 站会在客户端把地址改写成 /index.html（实测滚动后会做一次导航），
+  // 所以三种形态都算首页；番剧页、搜索页、空间页都不在范围内。
+  const isHomePage = () => {
+    const p = location.pathname;
+    return p === "/" || p === "" || p === "/index.html" || p === "/index.html/";
+  };
+
   const state = {
     settings: null,
     // 设置代际：每次设置变更就 +1。正在判定中的卡片发现代际变了就丢弃本次结果并重判，
@@ -38,6 +45,9 @@
     paused: false,
     fingerprintSent: false,
     engine: null, // rules.js 模块，init 时预加载，兜底解析要用
+    catCount: 0, // 主站类别开关当前藏掉了几张非视频卡
+    catHidden: new Set(), // 被类别开关藏掉的节点（没有 bvid，不在 removed 里）
+    deferredRemote: 0, // 主站因为不在视口内而推迟远程判定的卡片数
   };
 
   // ---------------------------------------------------------------- 工具
@@ -193,6 +203,91 @@
    *
    * 性能注意：不能做 querySelectorAll("*") 全子树遍历，B 站页面元素上万。
    */
+  /** 从 el 往上收集祖先链（远 → 近），用来求公共祖先 */
+  function ancestorChain(el, max = 10) {
+    const chain = [];
+    let n = el;
+    for (let i = 0; i < max && n && n !== document.body && n !== document.documentElement; i++) {
+      chain.push(n);
+      n = n.parentElement;
+    }
+    return chain.reverse();
+  }
+
+  /** 祖先链签名：每层只取标签名 + 首个 class。同一列表里的卡片签名相同。 */
+  function chainSig(el) {
+    const parts = [];
+    let n = el;
+    for (let i = 0; i < 6 && n && n !== document.body; i++) {
+      parts.push(`${n.tagName}.${String(n.className || "").trim().split(/\s+/)[0] || ""}`);
+      n = n.parentElement;
+    }
+    return parts.join(">");
+  }
+
+  /**
+   * 主站首页的列表容器。
+   *
+   * 不能用 class 名认（播放页那套 RECO_ROOTS 在首页一个都不匹配，B 站改版后更不可靠），
+   * 改用结构事实：同一列表里的卡片，向上一路长得一模一样。按祖先链签名分组 →
+   * 取最大的一组 → 求这组 anchor 的最深公共祖先，就是列表容器。
+   *
+   * 代价控制：每个 anchor 只读 6 层标签和 class，不做子树遍历。
+   * （全页 querySelectorAll 在这台机器上能直接把主线程卡死，见 AGENTS.md 性能红线。）
+   */
+  function learnHomeRoot() {
+    if (listRoot && listRoot.isConnected && bvidsIn(listRoot).size >= 3) return listRoot;
+    const anchors = [...document.querySelectorAll('a[href*="/video/BV"]')].slice(0, 300);
+    if (anchors.length < 4) return null;
+    const groups = new Map();
+    for (const a of anchors) {
+      const s = chainSig(a);
+      if (!groups.has(s)) groups.set(s, []);
+      groups.get(s).push(a);
+    }
+    let best = null;
+    for (const arr of groups.values()) if (!best || arr.length > best.length) best = arr;
+    if (!best || best.length < 3) return null;
+
+    let common = ancestorChain(best[0]);
+    for (const a of best.slice(1, 10)) {
+      const chain = ancestorChain(a);
+      let i = 0;
+      while (i < common.length && i < chain.length && common[i] === chain[i]) i++;
+      common = common.slice(0, i);
+      if (!common.length) break;
+    }
+    const root = common[common.length - 1];
+    if (!root || root === document.body || root === document.documentElement) return null;
+    if (root.querySelectorAll('a[href*="/video/BV"]').length < 3) return null;
+    return root;
+  }
+
+  /**
+   * 命中之后到底藏哪个节点。
+   *
+   * 首页每张卡外面还包着一层等高 wrapper（实测是卡片 > wrapper > 行容器三层）。
+   * 只藏卡片本体的话，网格会保留那一格的高度：把一行里的卡片全藏掉，下面所有行原地不动，
+   * 留下 210px 空洞；藏掉 wrapper 那一行才会真正收起来（下一行上移 270px）。
+   * 播放页的卡片直接挂在列表容器下，循环第一次就退出，行为不变。
+   */
+  function collapseTarget(card) {
+    let target = card;
+    for (let i = 0; i < 2; i++) {
+      const p = target.parentElement;
+      if (!p || p === document.body || p === document.documentElement) break;
+      if (listRoot && (p === listRoot || p.contains(listRoot))) break;
+      if (p.children.length > 8) break;
+      const pr = p.getBoundingClientRect();
+      const tr = target.getBoundingClientRect();
+      if (Math.abs(pr.height - tr.height) > 6) break;
+      if (pr.width < tr.width - 6) break;
+      if (bvidsIn(p).size !== 1) break;
+      target = p;
+    }
+    return target;
+  }
+
   function findCardRoot(anchor) {
     const cached = cardCache.get(anchor);
     if (cached && cached.isConnected && cached.contains(anchor)) return cached;
@@ -269,8 +364,24 @@
       '[class*="up-name"] [class*="name"], [class*="upname"] [class*="name"], .name, [class*="author"]',
     );
     const ownerName = (nameEl?.textContent || "").trim().slice(0, 60);
-    const titleEl = card.querySelector('[class*="title"]');
-    const title = (titleEl?.textContent || "").trim().slice(0, 200);
+
+    // 标题不能照搬播放页的 querySelector('[class*="title"]')。
+    // 主站首页的卡片里，第一个「class 带 title」的元素是 span.no-interest-title，
+    // 内容就是按钮文案「不感兴趣」——照搬过来会把四字按钮当标题，标题关键词规则全部失效。
+    // 所以按可靠度排序逐个试，并排掉装饰性元素（遮罩/悬浮框/骨架）。
+    const NOISE_CLS = /no-interest|mask|tooltip|hover|skeleton|placeholder/i;
+    let title = "";
+    for (const sel of ['h3[class*="tit"]', '[class*="info--tit"]', "h3", 'a[href*="/video/BV"][title]', '[class*="title"]']) {
+      for (const el of card.querySelectorAll(sel)) {
+        if (NOISE_CLS.test(String(el.className || ""))) continue;
+        const t = (el.getAttribute("title") || el.textContent || "").trim();
+        if (t.length >= 2) {
+          title = t.slice(0, 200);
+          break;
+        }
+      }
+      if (title) break;
+    }
 
     return {
       bvid,
@@ -343,7 +454,20 @@
       }
     }
 
-    // 3) 最后兜底：扫全页，只认有元数据的那批（至少能把推荐过滤掉）
+    // 3) 主站首页：列表容器靠结构推出来（卡片长得一样），不依赖 class 名
+    if (isHomePage()) {
+      const root = learnHomeRoot();
+      if (root) {
+        if (!listRoot || !listRoot.isConnected) listRoot = root;
+        if (pushAnchors(root) > 0) {
+          const list = dedupeByCard(out);
+          learnListRoot(list);
+          return list;
+        }
+      }
+    }
+
+    // 4) 最后兜底：扫全页，只认有元数据的那批（至少能把推荐过滤掉）
     if (state.related.size > 0) {
       for (const a of document.querySelectorAll('a[href*="/video/BV"]')) {
         const bvid = extractBvid(a.getAttribute("href"));
@@ -364,6 +488,10 @@
     for (const c of list) {
       if (seenBvid.has(c.bvid)) continue;
       const card = findCardRoot(c.anchor);
+      if (!card) continue;
+      // 骨架卡：主站首页的卡片先占位再填内容，这时候没有标题、没有时长。
+      // 当作候选会让它被判成「通过」并打上 done 标记，真实数据到了也不再重判（标题词就永远不会生效）。
+      if (!state.related.has(c.bvid) && String(card.innerText || "").trim().length < 2) continue;
       if (seenCard.has(card)) continue;
       seenCard.add(card);
       seenBvid.add(c.bvid);
@@ -382,6 +510,16 @@
       if (r.metric === "upPost24h" || r.metric === "upPost7d" || r.metric === "upPostPerDay") out.up = true;
     }
     return out;
+  }
+
+  /**
+   * 主站用可视区域懒取：远程指标（标签、UP 频率）只给视口附近或快进来的卡片发，
+   * 滚到再算。首页滚动无上限，一次性给上百张卡发请求会把单页预算吃光，也招风控。
+   */
+  function nearViewport(card, pad = 300) {
+    if (!card || !card.getBoundingClientRect) return true;
+    const r = card.getBoundingClientRect();
+    return r.bottom > -pad && r.top < window.innerHeight + pad;
   }
 
   function budgetLeft() {
@@ -469,7 +607,10 @@
 
   async function decideAndApply(card, bvid, item, settings, gen) {
     const needs = needsOf(settings.rules);
-    const useRemote = settings.remoteEnabled && (needs.tags || needs.up);
+    // 主站的远程指标默认关（settings.home.remote），要用得自己打开；播放页行为不变
+    const homeNow = isHomePage();
+    const remoteAllowed = settings.remoteEnabled && (!homeNow || settings.home?.remote === true);
+    const useRemote = remoteAllowed && (needs.tags || needs.up);
     const baseCtx = {
       rules: settings.rules,
       whitelist: settings.whitelist,
@@ -490,6 +631,11 @@
     }
 
     if (res.decision === "pending" && useRemote) {
+      // 主站：不在视口附近就先不算，也不标成已完成，滚到时再扫一次
+      if (homeNow && !nearViewport(card)) {
+        state.deferredRemote++;
+        return;
+      }
       card.classList.add("brf-pending");
       const remote = await fetchRemote(item, needs);
       if (gen !== state.gen) {
@@ -576,14 +722,24 @@
   }
 
   function removeCard(card, bvid) {
-    noteRemove(card, bvid);
+    // 主站需要连外层 wrapper 一起藏，否则整行被过滤后会在网格里留下空洞
+    const target = collapseTarget(card);
+    noteRemove(target, bvid);
+    const rec = state.removed.get(bvid);
+    if (rec) rec.node = target;
+    if (!rec) {
+      state.removed.set(bvid, {
+        node: target,
+        parent: target.parentElement,
+        next: target.nextElementSibling,
+        at: Date.now(),
+      });
+    }
     const s = state.settings;
     if (s && s.action === "hide") {
-      card.classList.add("brf-hidden");
+      target.classList.add("brf-hidden");
     } else {
-      const rec = state.removed.get(bvid);
-      if (!rec) state.removed.set(bvid, { node: card, parent: card.parentElement, next: card.nextElementSibling, at: Date.now() });
-      card.remove();
+      target.remove();
     }
   }
 
@@ -605,9 +761,90 @@
     }
     state.removed.clear();
     state.filtered.clear();
+    // 类别开关藏掉的是没有 bvid 的非视频卡，不在 removed 里，单独恢复
+    for (const el of state.catHidden) {
+      if (el && el.isConnected) {
+        el.classList.remove("brf-hidden");
+        delete el.dataset.brfCat;
+      }
+    }
+    state.catHidden.clear();
+    state.catCount = 0;
     for (const el of document.querySelectorAll("[data-brf-done]")) {
       el.dataset.brfDone = "0";
     }
+  }
+
+  // ------------------------------------------------------ 主站类别开关
+
+  /**
+   * 类别判定只看「链接到哪」+「卡面上的标记文案」，不依赖 B 站 class 名。
+   *
+   * 番剧和影视的链接形状一样（/bangumi/play/），靠卡面标记区分：
+   * 影视卡带「电影 / 影视 / 纪录片」角标（实测首页上的《我是工匠而已》就带一个「电影」标签）。
+   * 注意顺序：movie 必须在 bangumi 前面，否则影视卡会先被归到番剧。
+   */
+  function classifyCard(unit) {
+    if (!unit || !unit.querySelector) return "video";
+    if (unit.querySelector('a[href*="live.bilibili.com"]')) return "live";
+    if (unit.querySelector('a[href*="/cheese/play/"]')) return "course";
+    if (unit.querySelector('a[href*="/bangumi/play/"]')) {
+      const t = (unit.innerText || "").slice(0, 120);
+      return /电影|影视|纪录片|片单/.test(t) ? "movie" : "bangumi";
+    }
+    if (unit.querySelector('[class*="ad-report"], [class*="ad-floor"], [class*="advert"]')) return "ad";
+    const txt = (unit.innerText || "").slice(0, 80).replace(/\n/g, " ");
+    if (/(^|\s)广告(\s|$)/.test(txt)) return "ad";
+    return "video";
+  }
+
+  /** 把列表容器展开成一张张卡（行容器里放多张卡时往下一层） */
+  function cardUnits(root) {
+    const units = [];
+    const walk = (node, depth) => {
+      for (const child of node.children) {
+        if (bvidsIn(child).size > 1) {
+          if (depth < 3) walk(child, depth + 1);
+          continue;
+        }
+        units.push(child);
+      }
+    };
+    walk(root, 0);
+    return units;
+  }
+
+  /**
+   * 非视频卡走不了规则引擎（没有 bvid，也没有 stat），所以只能按类别整类隐藏。
+   * 开关是「打开 = 不显示」，默认全关。开关变化会走 restoreAndRescan，这里只负责按当前设置对齐状态。
+   */
+  function applyCategoryToggles() {
+    const home = state.settings && state.settings.home;
+    if (!isHomePage() || !home || home.enabled === false) return 0;
+    const root = listRoot && listRoot.isConnected ? listRoot : learnHomeRoot();
+    if (!root) return 0;
+    const off = home.hide || {};
+    let hidden = 0;
+    for (const unit of cardUnits(root)) {
+      const kind = classifyCard(unit);
+      if (kind === "video") continue;
+      const want = off[kind] === true;
+      const isHidden = state.catHidden.has(unit);
+      if (want && !isHidden) {
+        unit.dataset.brfCat = kind;
+        unit.classList.add("brf-hidden");
+        state.catHidden.add(unit);
+        hidden++;
+      } else if (!want && isHidden) {
+        unit.classList.remove("brf-hidden");
+        delete unit.dataset.brfCat;
+        state.catHidden.delete(unit);
+      } else if (want) {
+        hidden++;
+      }
+    }
+    state.catCount = hidden;
+    return hidden;
   }
 
   // ------------------------------------------------------------ 扫描循环
@@ -629,6 +866,9 @@
     if (!state.settings || !state.settings.enabled || state.paused) return;
     if (document.hidden) return; // 后台标签页不干活
     state.pageBvid = currentPageBvid();
+    state.deferredRemote = 0;
+    // 先把非视频卡（番剧/影视/课程/直播/广告）按开关对齐，它们没有 bvid，不进候选
+    if (isHomePage()) applyCategoryToggles();
     const candidates = collectCandidates();
     // 全部被摘掉后 candidates 会变 0，这时保留上一次的数值，避免 popup 显示「推荐条数 0」
     if (candidates.length) state.scanned = candidates.length;
@@ -1018,6 +1258,15 @@
 
     document.addEventListener("mouseover", onMouseOver, true);
     document.addEventListener("scroll", () => hideToolbar(), true);
+    // 主站卡片多，远程指标只给视口附近的卡发请求；滚到新的卡片时补一次扫描
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (!state.deferredRemote) return;
+        scheduleScan(250);
+      },
+      { passive: true },
+    );
 
     // 保底轮询：B 站列表是懒加载的，MutationObserver 偶尔会因为批量重渲染而漏掉
     setInterval(() => scheduleScan(50), 2500);
@@ -1051,6 +1300,9 @@
           remoteUsed: state.remoteUsed,
           lastScanCost: state.lastScanCost ?? null,
           hasRelated: state.related.size > 0,
+          isHome: isHomePage(),
+          categoriesHidden: state.catCount || 0,
+          deferredRemote: state.deferredRemote || 0,
           hits: [...state.filtered.entries()].slice(0, 30).map(([bvid, reason]) => ({
             bvid,
             reason,

@@ -31,6 +31,7 @@
     <button class="tab" data-tab="keywords">批量关键词</button>
     <button class="tab" data-tab="lists">白名单 / 黑名单</button>
     <button class="tab" data-tab="presets">预设规则包</button>
+    <button class="tab" data-tab="home">主站</button>
     <button class="tab" data-tab="advanced">高级</button>
     <button class="tab" data-tab="log">命中日志</button>
   </nav>
@@ -156,6 +157,40 @@
         </div>
       </div>
       <div class="preset-grid" id="presetGrid"></div>
+    </section>
+
+    <!-- 主站 -->
+    <section class="panel" id="panel-home">
+      <div class="panel-head">
+        <div>
+          <h2>主站</h2>
+          <p class="hint">
+            除了视频播放页，也可以管一管 www.bilibili.com 首页的推荐流。首页的普通视频卡片同样走上面的规则表；
+            番剧、影视、课程、直播、广告这些卡片没有 bvid，也拿不到时长/播放量，走不了规则引擎，只能在下面按类别整类隐藏。
+          </p>
+        </div>
+      </div>
+
+      <div class="form">
+        <div class="field">
+          <label class="check"><input type="checkbox" id="homeEnabled" /> 在首页也过滤推荐</label>
+          <p class="hint">默认开。关掉后首页完全不管，规则表仍然作用在播放页。</p>
+        </div>
+
+        <div class="field">
+          <label class="check"><input type="checkbox" id="homeRemote" /> 首页也使用需要额外请求的指标</label>
+          <p class="hint">
+            默认关。标签关键词和 UP 主投稿频率要逐条请求 B 站接口，而首页会无限滚动、卡片数量没有上限。
+            开启后也只对滚到视口附近的卡片发请求，并受「高级 → 每页最多额外请求数」限制。
+          </p>
+        </div>
+
+        <div class="field field--wide">
+          <label>按类别隐藏（勾上 = 首页不显示该类卡片）</label>
+          <p class="hint">这些卡片没有 bvid 和元数据，不参与规则判定，也不能按播放量/时长过滤。</p>
+          <div class="checks" id="homeCategories"></div>
+        </div>
+      </div>
     </section>
 
     <!-- 高级 -->

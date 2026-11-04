@@ -43,7 +43,38 @@ export const DEFAULT_SETTINGS = {
   quickButtons: true,
   // 命中日志保留条数
   logLimit: 200,
+
+  // ------------------------------------------------------------------
+  // 主站（www.bilibili.com 首页推荐流）
+  //
+  // 为什么单独一组而不是复用上面的字段：播放页右侧是「一个列表」，首页是
+  // 多行网格 + 混着番剧/影视/课程/直播/广告卡。两边的默认值和风险都不同：
+  //   - 首页卡片多（滚动无上限），远程请求默认关，要让用户自己开
+  //   - 非视频卡没有 bvid，走不了规则引擎，只能按类别整类隐藏
+  home: {
+    // 总开关。关掉后首页完全不管，播放页不受影响
+    enabled: true,
+    // 首页是否使用需要额外请求的指标（标签、UP 频率）。默认关：首页卡片太多，
+    // 开了很容易把单页预算吃光，而且用户在主站更在意「别卡」
+    remote: false,
+    // 类别开关：打开 = 首页不显示该类卡片
+    hide: {
+      bangumi: false,
+      movie: false,
+      course: false,
+      live: false,
+      ad: false,
+    },
+  },
 };
+
+export const HOME_CATEGORIES = [
+  { key: "bangumi", label: "番剧 / 国创", hint: "链接到 /bangumi/play/ 且不是影视的卡片" },
+  { key: "movie", label: "影视 / 纪录片", hint: "番剧卡里带「电影 / 影视 / 纪录片」标记的那些" },
+  { key: "course", label: "课程 / 课堂", hint: "链接到 /cheese/play/ 的付费课程卡" },
+  { key: "live", label: "直播", hint: "链接到 live.bilibili.com 的直播间卡片" },
+  { key: "ad", label: "广告", hint: "带「广告」标记的推广卡" },
+];
 
 export const DEFAULT_STATS = {
   totalFiltered: 0,
@@ -66,8 +97,23 @@ export function normalizeSettings(raw) {
   s.likeRateMinView = Number(s.likeRateMinView) || 0;
   s.maxRemotePerPage = Number(s.maxRemotePerPage) || 0;
   s.logLimit = Number(s.logLimit) || DEFAULT_SETTINGS.logLimit;
+  s.home = normalizeHome(raw?.home);
   s.version = 1;
   return s;
+}
+
+/** 主站字段补齐：旧设置里没有 home，也不能让它变成 undefined */
+function normalizeHome(raw) {
+  const d = DEFAULT_SETTINGS.home;
+  const h = raw && typeof raw === "object" ? raw : {};
+  const hide = h.hide && typeof h.hide === "object" ? h.hide : {};
+  const out = {
+    enabled: h.enabled !== false,
+    remote: h.remote === true,
+    hide: {},
+  };
+  for (const k of Object.keys(d.hide)) out.hide[k] = hide[k] === true;
+  return out;
 }
 
 export function normalizeRule(r) {

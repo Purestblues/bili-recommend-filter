@@ -6,9 +6,9 @@
 [![No build step](https://img.shields.io/badge/build-none-brightgreen)](package.json)
 [![License MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Chrome 扩展（Manifest V3，零依赖、零构建），用来过滤哔哩哔哩**视频播放页右侧「接下来播放」推荐区**的内容。
+Chrome 扩展（Manifest V3，零依赖、零构建），用来过滤哔哩哔哩**视频播放页右侧「接下来播放」推荐区**，以及**主站首页的推荐流**。
 
-**English** — A zero-dependency Chrome MV3 extension that filters the "Up next" recommendations on Bilibili video pages. Rules are declared in an editable table and applied to the page in real time: video duration, view count, like / coin / favorite / comment rates, title / uploader / tag keywords, partition, and how often the uploader posts. There is a whitelist and a blacklist, one-click "block this uploader" on any card, and a preset rule pack for cleaning up bulk-upload spam accounts. Load it unpacked from this folder — no build step, no `npm install`. Everything runs locally; the only network calls go to Bilibili's own public API (video tags, uploader posting frequency), and you can switch them off entirely in the advanced settings. Read the design notes in [AGENTS.md](AGENTS.md) (Chinese) before changing the filtering pipeline.
+**English** — A zero-dependency Chrome MV3 extension that filters the "Up next" recommendations on Bilibili video pages and the recommendation feed on the Bilibili homepage. Rules are declared in an editable table and applied to the page in real time: video duration, view count, like / coin / favorite / comment rates, title / uploader / tag keywords, partition, and how often the uploader posts. There is a whitelist and a blacklist, one-click "block this uploader" on any card, and a preset rule pack for cleaning up bulk-upload spam accounts. On the homepage you can additionally hide whole categories of non-video cards (bangumi, movies, courses, live streams, ads) with a switch each. Load it unpacked from this folder — no build step, no `npm install`. Everything runs locally; the only network calls go to Bilibili's own public API (video tags, uploader posting frequency), and you can switch them off entirely in the advanced settings. Read the design notes in [AGENTS.md](AGENTS.md) (Chinese) before changing the filtering pipeline.
 
 过滤维度：视频时长、播放量、点赞率/投币率/收藏率/评论率、标题关键词、UP 主名关键词、标签关键词、分区名、UP 主 24 小时 / 7 天投稿数与日均投稿数。关键词类指标都支持批量粘贴。另有 UP 主白名单 / 黑名单、一键「屏蔽此 UP」、预设规则包。
 
@@ -137,6 +137,18 @@ popup 和日志里的标题都是链接，点一下会在新标签页打开这�
 
 注意「标题词+」加的是**标题关键词过滤规则**——添加后，所有标题含这个词的推荐都会消失，所以别加太泛的词。
 
+## 主站首页
+
+除了播放页，`www.bilibili.com` 首页的推荐流也会按同一套规则过滤。设置页多了一个「主站」标签页：
+
+- **在首页也过滤推荐**：默认开启。关掉后首页完全不管，规则表仍然作用在播放页。
+- **首页也使用需要额外请求的指标**：默认关闭。标签关键词和 UP 主投稿频率要逐条请求接口，而首页会无限滚动、卡片数量没有上限——开着它容易把单页预算吃光，也更容易撞风控。开启后也只对滚到视口附近的卡片发请求。
+- **按类别隐藏**：番剧/国创、影视/纪录片、课程/课堂、直播、广告各一个开关，勾上就整类不显示。
+
+为什么这些类别卡不能像普通视频那样按规则过滤：它们没有 bvid，也没有播放量、时长这些字段，规则引擎拿不到东西判定，所以只能按类别整类隐藏。默认全关，因为一装上就把番剧和直播全藏掉太激进。
+
+首页上被过滤掉的卡片会真正从网格里收走（下面的卡片上移补位），而不是留一个空格子。这一点专门处理过：只把卡片本体隐藏的话，整行被过滤后下面所有行会原地不动，留下 210px 的空白，所以命中时会连卡片外面那层等高容器一起藏。
+
 ## 关于额外请求与风控
 
 标签关键词和 UP 主投稿频率这两个维度必须额外请求 B 站接口，是唯一有代价的部分。默认做了这些保护：
@@ -158,7 +170,7 @@ B 站前端改版可能影响 DOM 适配与数据来源。适配点集中在三�
 
 ## 手动验收清单
 
-自动化测试覆盖了规则引擎（149 项）与真实浏览器端到端流程（35 项），但下面这些需要你本人确认一遍：
+自动化测试覆盖了规则引擎（149 项）、真实浏览器端到端流程（35 项）与主站首页（18 项），但下面这些需要你本人确认一遍：
 
 1. 装好后打开任意播放页，右侧推荐区正常显示，顶部导航栏和播放器都在，没有卡片被无故隐藏
 2. 去预设页导入「清理 AI 批量号」，刷新页面，右侧明显少了一些 AI 批量号视频，剩下的卡片紧挨着排列、没有大片空白
@@ -170,6 +182,8 @@ B 站前端改版可能影响 DOM 适配与数据来源。适配点集中在三�
 8. 打开「允许额外请求」，加一条「UP主7天投稿数 ≥ 10」，等待几秒，高产的 UP 的视频被过滤；同时看「额外请求」计数有没有涨
 9. 改一条规则的阈值，点右上角「保存」，关掉浏览器再打开，值应该还是你改的那个
 10. 在「高级 → 配置备份」点「导出到文件」，应该下载一个 json；改几条规则后再「从文件导入」这个 json，配置应该恢复原样
+11. 打开 `www.bilibili.com` 首页，加一条「播放量 < 1000」或「时长 < 60」，首页推荐里应该少一批卡片，剩下的卡片紧挨着排列、没有整行空白
+12. 去「主站」标签页勾上「直播」和「广告」，刷新首页，直播间和广告卡应该消失；取消勾选后回来
 
 ## 开发
 
@@ -185,6 +199,7 @@ npm run quick    # 页面快捷按钮 + 设置页同步（10 项）
 npm run popup    # popup 命中列表的标题链接（9 项）
 npm run backup   # 导出/导入本地文件（17 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
+npm run home     # 主站首页端到端（18 项，需要联网）
 npm run verify   # WBI 签名与接口连通性专项检查
 npm run pack     # 打发布 zip 到 out/bili-recommend-filter-<版本>.zip
 ```

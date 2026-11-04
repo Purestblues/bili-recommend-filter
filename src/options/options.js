@@ -8,6 +8,7 @@ import {
   writeStats,
   readLog,
   writeLog,
+  HOME_CATEGORIES,
 } from "../lib/defaults.js";
 import { formatRule, splitKeywordInput, displayKeyword, hasSpace, hasPunct, normalizeKeyword } from "../lib/rules.js";
 
@@ -778,6 +779,55 @@ function renderAll() {
   renderKeywords();
   renderLists();
   renderAdvanced();
+  renderHome();
+}
+
+// ------------------------------------------------------------------ 主站
+
+function initHome() {
+  const on = $("#homeEnabled");
+  const remote = $("#homeRemote");
+  if (on) {
+    on.addEventListener("change", (e) => {
+      settings.home.enabled = e.target.checked;
+      scheduleSave();
+    });
+  }
+  if (remote) {
+    remote.addEventListener("change", (e) => {
+      settings.home.remote = e.target.checked;
+      scheduleSave();
+    });
+  }
+}
+
+function renderHome() {
+  const h = settings.home || {};
+  const on = $("#homeEnabled");
+  const remote = $("#homeRemote");
+  if (on) on.checked = h.enabled !== false;
+  if (remote) remote.checked = h.remote === true;
+
+  const box = $("#homeCategories");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const c of HOME_CATEGORIES) {
+    const label = document.createElement("label");
+    label.className = "check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.cat = c.key;
+    input.checked = h.hide ? h.hide[c.key] === true : false;
+    input.addEventListener("change", (e) => {
+      settings.home.hide[c.key] = e.target.checked;
+      scheduleSave();
+    });
+    const span = document.createElement("span");
+    span.textContent = c.label;
+    span.title = c.hint;
+    label.append(input, span);
+    box.append(label);
+  }
 }
 
 function initSaveButton() {
@@ -802,6 +852,7 @@ async function init() {
   initKeywords();
   initLists();
   initAdvanced();
+  initHome();
   initLog();
   initExternalSync();
   initSaveButton();
