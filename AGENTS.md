@@ -142,7 +142,13 @@ LICENSE                   MIT
 
 **骨架卡不能打 done 标记。** 首页卡片先占位再填内容，骨架阶段没有标题和时长。如果把它当候选判成「通过」并写上 `data-brf-done="1"`，真实数据到了也不会重判。现在 `dedupeByCard()` 会跳过「没有元数据且 innerText 少于 2 个字符」的卡片，等它渲染出来再纳入候选。
 
-**番剧/影视/课程/直播/广告卡没有 bvid**，走不了规则引擎（也没有 stat 和 duration），所以只能按类别整类隐藏（`applyCategoryToggles()`）。类别判定只看链接：`live.bilibili.com` → 直播、`/cheese/play/` → 课程、`/bangumi/play/` → 番剧或影视，两者链接形状一样，靠卡面标记文案（电影 / 影视 / 纪录片 / 片单）区分，因此 **movie 必须排在 bangumi 前面**。开关是「勾上 = 不显示」，默认全关。
+**番剧/影视/漫画/课程/直播/赛事/广告卡没有 bvid 或元数据不全**，走不了规则引擎，所以只能按类别整类隐藏（`applyCategoryToggles()`）。两个信号：
+
+一是**卡面角标**（`badgeKind()`）。这是漫画和赛事唯一的可靠信号：实测漫画卡指向 `manga.bilibili.com/detail/mc…`，而**赛事卡指向的是普通视频页**（`https://www.bilibili.com/video/BV1T8xm6EEqi/`），链接上完全看不出是赛事。首页 bundle 里这类卡的结构是 `.badge > .floor-title`（文字来自数据），但不依赖 class 名，改成「在卡片内找前 40 个叶子节点、文本恰等于固定词表里的词」，数字（播放量、时长）不会误中。
+
+二是**链接指向**：`manga.bilibili.com` → 漫画、`live.bilibili.com` → 直播、`/cheese/play/` → 课程、`/v/game/match` 或 `/v/esports` → 赛事、`/bangumi/play/` → 番剧或影视（链接形状一样，靠卡面文案区分，所以 movie 必须排在 bangumi 前面）。
+
+元数据里的类别（`goto`）不可靠：`ingestRelated` 只收 bvid 条目，番剧/直播/漫画本来就进不来。开关语义是「勾上 = 不显示」，默认全关。
 
 **主站的额外请求默认关。** `settings.home.remote` 默认为 `false`，与播放页的 `remoteEnabled`（默认 true）分开：首页会无限滚动、卡片没有上限，开一次就可能把单页预算吃光。开启后也只给视口上下 300px 内的卡片发请求（`nearViewport()`），不在范围内的卡片**不标记完成**，滚回来时 `scroll` 监听会再扫一次。
 

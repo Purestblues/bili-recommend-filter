@@ -61,18 +61,22 @@ export const DEFAULT_SETTINGS = {
     hide: {
       bangumi: false,
       movie: false,
+      manga: false,
       course: false,
       live: false,
+      esports: false,
       ad: false,
     },
   },
 };
 
 export const HOME_CATEGORIES = [
-  { key: "bangumi", label: "番剧 / 国创", hint: "链接到 /bangumi/play/ 且不是影视的卡片" },
-  { key: "movie", label: "影视 / 纪录片", hint: "番剧卡里带「电影 / 影视 / 纪录片」标记的那些" },
+  { key: "bangumi", label: "番剧 / 国创", hint: "链接到 /bangumi/play/ 或卡面带「番剧 / 国创」角标的卡片" },
+  { key: "movie", label: "影视 / 纪录片", hint: "卡面带「电影 / 影视 / 纪录片」角标，或链接到 /bangumi/play/ 的影视卡" },
+  { key: "manga", label: "漫画", hint: "链接到 manga.bilibili.com，或卡面带「漫画」角标的卡片" },
   { key: "course", label: "课程 / 课堂", hint: "链接到 /cheese/play/ 的付费课程卡" },
   { key: "live", label: "直播", hint: "链接到 live.bilibili.com 的直播间卡片" },
+  { key: "esports", label: "赛事", hint: "卡面带「赛事」角标的卡片（它的链接其实是普通视频页，只能靠角标认）" },
   { key: "ad", label: "广告", hint: "带「广告」标记的推广卡" },
 ];
 

@@ -777,17 +777,56 @@
 
   // ------------------------------------------------------ 主站类别开关
 
+  // 卡面角标文案 → 类别。
+  //
+  // 为什么需要它：漫画/赛事/电影 这几类卡片其实都是普通视频卡或 floor 卡，链接可能是
+  // 普通视频页（实测赛事卡指向 https://www.bilibili.com/video/BV…），光看链接分不出来。
+  // 首页 bundle 里这类卡的结构是 `.badge > .floor-title`，文字来自数据；但按项目规矩
+  // 不依赖 class 名，所以改成「在卡片内找叶子节点、文本恰好等于下表里的词」。
+  // 只认固定词表，所以数字（播放量、时长）不会被误认。
+  const BADGE_LABELS = {
+    漫画: "manga",
+    赛事: "esports",
+    电影: "movie",
+    影视: "movie",
+    纪录片: "movie",
+    片单: "movie",
+    番剧: "bangumi",
+    国创: "bangumi",
+    课堂: "course",
+    课程: "course",
+    直播: "live",
+    广告: "ad",
+  };
+
+  /** 从卡面角标认类别。只扫有限数量的叶子节点，守住扫描耗时。 */
+  function badgeKind(unit) {
+    let n = 0;
+    for (const el of unit.querySelectorAll("span, div, i, em")) {
+      if (++n > 40) break;
+      if (el.children.length > 0) continue; // 只看叶子节点，标题/UP 名这类容器直接跳
+      const t = (el.textContent || "").trim();
+      if (!t || t.length > 4) continue;
+      const kind = BADGE_LABELS[t];
+      if (kind) return kind;
+    }
+    return "";
+  }
+
   /**
-   * 类别判定只看「链接到哪」+「卡面上的标记文案」，不依赖 B 站 class 名。
+   * 类别判定：先看卡面角标（覆盖漫画/赛事/电影这类「挂角标的视频卡」），再看链接指向，
+   * 最后才看广告标记。
    *
-   * 番剧和影视的链接形状一样（/bangumi/play/），靠卡面标记区分：
-   * 影视卡带「电影 / 影视 / 纪录片」角标（实测首页上的《我是工匠而已》就带一个「电影」标签）。
-   * 注意顺序：movie 必须在 bangumi 前面，否则影视卡会先被归到番剧。
+   * 番剧和影视的链接形状一样（/bangumi/play/），没有角标时靠卡面文案区分。
    */
   function classifyCard(unit) {
     if (!unit || !unit.querySelector) return "video";
+    const byBadge = badgeKind(unit);
+    if (byBadge) return byBadge;
+    if (unit.querySelector('a[href*="manga.bilibili.com"]')) return "manga";
     if (unit.querySelector('a[href*="live.bilibili.com"]')) return "live";
     if (unit.querySelector('a[href*="/cheese/play/"]')) return "course";
+    if (unit.querySelector('a[href*="/v/game/match"], a[href*="/v/esports"]')) return "esports";
     if (unit.querySelector('a[href*="/bangumi/play/"]')) {
       const t = (unit.innerText || "").slice(0, 120);
       return /电影|影视|纪录片|片单/.test(t) ? "movie" : "bangumi";
