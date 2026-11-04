@@ -20,8 +20,17 @@ async function activeTab() {
   return tab || null;
 }
 
-function isVideoPage(url) {
-  return /^https:\/\/www\.bilibili\.com\/(video|list)\//.test(url || "");
+/**
+ * 当前标签页属于哪种受支持的页面。
+ *
+ * 首页必须单独算：B 站会把它改写成 /index.html，而 popup 之前只认 /video/ 和 /list/，
+ * 所以在首页上永远显示「当前不是 B 站视频播放页」——但过滤其实是在生效的。
+ */
+function pageKind(url) {
+  const u = String(url || "");
+  if (/^https:\/\/www\.bilibili\.com\/(video|list)\//.test(u)) return "video";
+  if (/^https:\/\/www\.bilibili\.com\/(index\.html)?([?#]|$)/.test(u)) return "home";
+  return "";
 }
 
 async function askContent(tabId, type) {
@@ -47,8 +56,8 @@ async function render() {
   const line = $("stateLine");
   line.classList.remove("warn");
 
-  if (!tab || !isVideoPage(tab.url)) {
-    line.textContent = "当前不是 B 站视频播放页，过滤不会生效。";
+  if (!tab || !pageKind(tab.url)) {
+    line.textContent = "当前不是 B 站播放页或首页，过滤不会生效。";
     line.classList.add("warn");
     $("mScanned").textContent = "–";
     $("mFiltered").textContent = "–";
@@ -56,6 +65,8 @@ async function render() {
     renderHits([]);
     return;
   }
+
+  const kind = pageKind(tab.url);
 
   if (settings.enabled === false) {
     line.textContent = "总开关已关闭。";
@@ -71,9 +82,15 @@ async function render() {
   }
 
   if (settings.enabled !== false) {
-    line.textContent = state.hasRelated
-      ? "已接管本页右侧推荐区。"
-      : "等待推荐数据加载…（可用「重新扫描」）";
+    if (kind === "home") {
+      const cats = state.categoriesHidden || 0;
+      const base = state.scanned ? "已接管首页推荐流" : "等待首页推荐加载…（可用「重新扫描」）";
+      line.textContent = cats ? `${base}（另按类别隐藏 ${cats} 张）` : base + "。";
+    } else {
+      line.textContent = state.hasRelated
+        ? "已接管本页右侧推荐区。"
+        : "等待推荐数据加载…（可用「重新扫描」）";
+    }
   }
 
   $("mScanned").textContent = state.scanned ?? 0;
@@ -126,7 +143,7 @@ $("openOptions").addEventListener("click", () => {
 
 $("rescan").addEventListener("click", async () => {
   const tab = await activeTab();
-  if (!tab || !isVideoPage(tab.url)) return;
+  if (!tab || !pageKind(tab.url)) return;
   await askContent(tab.id, "BRF_RESCAN");
   setTimeout(render, 400);
 });

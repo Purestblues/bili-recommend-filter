@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "B站推荐过滤 · Bili Recommend Filter",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "按时长、播放量、点赞率、标题/UP/标签关键词、UP主投稿频率过滤 B 站播放页右侧推荐与首页推荐流。",
   "minimum_chrome_version": "111",
   "permissions": [

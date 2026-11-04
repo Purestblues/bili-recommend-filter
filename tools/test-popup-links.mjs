@@ -138,6 +138,58 @@ const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, sid);
 fs.writeFileSync(path.join(OUT, "popup-hits.png"), Buffer.from(shot.data, "base64"));
 console.log("      已保存 out/popup-hits.png");
 
+// ---------------------------------------------------------------- 首页
+// 回归：首页必须被 popup 认作受支持的页面。曾经 popup 只认 /video// 和 /list/，
+// 在首页上永远显示「当前不是 B 站视频播放页，过滤不会生效」，指标全是破折号。
+console.log("\n== 4. 首页也要显示统计与命中 ==");
+const MOCK_HOME = `(() => {
+  const FAKE_TAB = { id: 4343, url: 'https://www.bilibili.com/' };
+  const HOME_STATE = {
+    pageBvid: '', scanned: 12, filtered: 4, remoteUsed: 0, hasRelated: true,
+    isHome: true, categoriesHidden: 3,
+    hits: [
+      { bvid: 'BV1home000001', title: '首页被过滤的一条', reason: '播放量 3,000次 <1,000,000次' },
+      { bvid: 'BV1home000002', title: '首页被过滤的第二条', reason: '时长 17秒 <60秒' }
+    ]
+  };
+  const patch = () => {
+    try {
+      const q = (qq, cb) => { const r = [FAKE_TAB]; if (typeof cb === 'function') { cb(r); return; } return Promise.resolve(r); };
+      const sm = (id, msg, cb) => { const r = HOME_STATE; if (typeof cb === 'function') { cb(r); return; } return Promise.resolve(r); };
+      Object.defineProperty(chrome.tabs, 'query', { value: q, configurable: true, writable: true });
+      Object.defineProperty(chrome.tabs, 'sendMessage', { value: sm, configurable: true, writable: true });
+      return true;
+    } catch (e) { return String(e); }
+  };
+  window.__mockOk = patch();
+})()`;
+
+const home = await newPage(`chrome-extension://${extId}/src/popup/popup.html`, { injectBefore: MOCK_HOME });
+await sleep(2500);
+const homeView = await evaluate(
+  cdp,
+  home.sid,
+  `(() => ({
+    line: document.querySelector('#stateLine')?.textContent || '',
+    warn: document.querySelector('#stateLine')?.classList.contains('warn') || false,
+    scanned: document.querySelector('#mScanned')?.textContent,
+    filtered: document.querySelector('#mFiltered')?.textContent,
+    remote: document.querySelector('#mRemote')?.textContent,
+    hits: [...document.querySelectorAll('#hitList li')].map(li => ({
+      text: (li.firstElementChild?.textContent || '').slice(0, 20),
+      href: li.querySelector('a.t')?.getAttribute('href') || null,
+    })),
+  }))()`,
+);
+console.log(`      状态行: ${homeView.line}`);
+console.log(`      指标: 推荐=${homeView.scanned} 过滤=${homeView.filtered} 请求=${homeView.remote}`);
+check("首页不再提示「过滤不会生效」", !/不会生效/.test(homeView.line), homeView.line);
+check("首页状态行不是警告态", homeView.warn === false, String(homeView.warn));
+check("首页指标不再是破折号", homeView.scanned === "12" && homeView.filtered === "4", JSON.stringify(homeView));
+check("首页命中列表有内容", homeView.hits.length === 2, JSON.stringify(homeView.hits));
+check("首页命中标题是视频链接", (homeView.hits[0]?.href || "").includes("BV1home000001"), String(homeView.hits[0]?.href));
+check("首页状态行显示类别隐藏数", /类别隐藏 3/.test(homeView.line), homeView.line);
+
 console.log(`\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed)`);
 cdp.close();
 proc.kill("SIGKILL");

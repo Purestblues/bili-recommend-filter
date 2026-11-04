@@ -154,6 +154,8 @@ LICENSE                   MIT
 
 **主站的额外请求默认关。** `settings.home.remote` 默认为 `false`，与播放页的 `remoteEnabled`（默认 true）分开：首页会无限滚动、卡片没有上限，开一次就可能把单页预算吃光。开启后也只给视口上下 300px 内的卡片发请求（`nearViewport()`），不在范围内的卡片**不标记完成**，滚回来时 `scroll` 监听会再扫一次。
 
+**popup 必须认首页。** 曾经 `popup.js` 只认 `/^https:\/\/www\.bilibili\.com\/(video|list)\//`，于是在首页上永远显示「当前不是 B 站视频播放页，过滤不会生效」，三个指标全是破折号——但过滤其实一直在跑。现在改成 `pageKind(url)`：`video` / `home` / 空，首页又包括 `/`、`/?…`、`/index.html` 三种形态。改这块时记得同步改 `tools/test-popup-links.mjs`（那里用 mock 的 `chrome.tabs` 模拟视频页和首页两种标签页）。
+
 **测试是独立的。** `npm run home`（24 项）真实打开首页，守的是这六条：首屏不等接口就有候选、标题不是「不感兴趣」、规则能过滤、被藏的是外层 wrapper、类别开关能开能关（含注入的漫画/赛事/推广假卡片）、`home.remote=false` 时零额外请求。播放页那套 `npm run e2e` 断言（右侧列表、related 元数据）在首页完全不适用，不要强行复用。
 
 ## 关键词为什么「加了却不过滤」
