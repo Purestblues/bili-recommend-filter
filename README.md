@@ -6,9 +6,9 @@
 [![No build step](https://img.shields.io/badge/build-none-brightgreen)](package.json)
 [![License MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Chrome 扩展（Manifest V3，零依赖、零构建），用来过滤哔哩哔哩**视频播放页右侧「接下来播放」推荐区**，以及**主站首页的推荐流**。
+Chrome 扩展（Manifest V3，零依赖、零构建），用来过滤哔哩哔哩**视频播放页右侧「接下来播放」推荐区**、**主站首页的推荐流**，以及播放页右侧偶发的**运营推广卡与广告横幅**。
 
-**English** — A zero-dependency Chrome MV3 extension that filters the "Up next" recommendations on Bilibili video pages and the recommendation feed on the Bilibili homepage. Rules are declared in an editable table and applied to the page in real time: video duration, view count, like / coin / favorite / comment rates, title / uploader / tag keywords, partition, and how often the uploader posts. There is a whitelist and a blacklist, one-click "block this uploader" on any card, and a preset rule pack for cleaning up bulk-upload spam accounts. On the homepage you can additionally hide whole categories of non-video cards (bangumi, movies, courses, live streams, ads) with a switch each. Load it unpacked from this folder — no build step, no `npm install`. Everything runs locally; the only network calls go to Bilibili's own public API (video tags, uploader posting frequency), and you can switch them off entirely in the advanced settings. Read the design notes in [AGENTS.md](AGENTS.md) (Chinese) before changing the filtering pipeline.
+**English** — A zero-dependency Chrome MV3 extension that filters the "Up next" recommendations on Bilibili video pages and the recommendation feed on the Bilibili homepage. Rules are declared in an editable table and applied to the page in real time: video duration, view count, like / coin / favorite / comment rates, title / uploader / tag keywords, partition, and how often the uploader posts. There is a whitelist and a blacklist, one-click "block this uploader" on any card, and a preset rule pack for cleaning up bulk-upload spam accounts. On the homepage you can additionally hide whole categories of non-video cards (bangumi, movies, courses, live streams, ads) with a switch each; on video pages a separate switch hides the occasional operation-promo card and the right-hand ad banner (matched by activity-page links, tracking domains and ad container classes, and never at the expense of bangumi / live / course cards). Load it unpacked from this folder — no build step, no `npm install`. Everything runs locally; the only network calls go to Bilibili's own public API (video tags, uploader posting frequency), and you can switch them off entirely in the advanced settings. Read the design notes in [AGENTS.md](AGENTS.md) (Chinese) before changing the filtering pipeline.
 
 过滤维度：视频时长、播放量、点赞率/投币率/收藏率/评论率、标题关键词、UP 主名关键词、标签关键词、分区名、UP 主 24 小时 / 7 天投稿数与日均投稿数。关键词类指标都支持批量粘贴。另有 UP 主白名单 / 黑名单、一键「屏蔽此 UP」、预设规则包。
 
@@ -153,6 +153,16 @@ popup 和日志里的标题都是链接，点一下会在新标签页打开这�
 
 首页上被过滤掉的卡片会真正从网格里收走（下面的卡片上移补位），而不是留一个空格子。这一点专门处理过：只把卡片本体隐藏的话，整行被过滤后下面所有行会原地不动，留下 210px 的空白，所以命中时会连卡片外面那层等高容器一起藏。
 
+## 播放页右侧的推广卡
+
+右侧推荐区偶尔会把第一个位置换成一张运营推广卡（指向 `/toy/`、`/blackboard/` 这类站内活动页），右侧底部还常有一条广告横幅。它们没有 bvid、没有播放量/时长，规则引擎什么都取不到，所以不归「过滤规则」表管，而是在设置页多了一个「播放页」标签页，里面一个开关：**隐藏右侧的运营推广卡与广告横幅**，默认开。
+
+判据都是能在链接或 class 上看到的硬信号：链接带 `specialRecommend`（运营推荐位）、指向 `/toy/`、`/blackboard/`、`/festival/` 活动页、带 `cm.bilibili.com` 推广打点或 `adfloor` 打点，或者容器带 `ad-report`、`ad-floor`、`advert` 广告位标记。
+
+![播放页设置](docs/screenshots/options-video.png)
+
+反过来，指向普通视频、番剧、直播、课程、漫画的卡片一张都不碰——哪怕它带了 `specialRecommend` 参数。宁可漏杀，不可把你想看的番剧或直播卡当广告藏掉。关掉开关后不用刷新页面，被藏的卡片会立刻回来。
+
 ## 关于额外请求与风控
 
 标签关键词和 UP 主投稿频率这两个维度必须额外请求 B 站接口，是唯一有代价的部分。默认做了这些保护：
@@ -166,15 +176,15 @@ popup 和日志里的标题都是链接，点一下会在新标签页打开这�
 
 ## 已知限制
 
-右侧推荐区里混入的**广告卡片**（bvid 不在推荐数据里）不会被过滤，因为它没有可用的元数据。
+广告卡不归规则引擎管：它们没有 bvid，拿不到时长/播放量，所以只能按「推广信号」整卡隐藏（见上面「播放页右侧的推广卡」），不能写成一条按指标过滤的规则。B 站如果把推广位换成新的活动页路径或新的广告位 class 名，判据需要补一条。
 
-过滤只作用于播放页右侧推荐区，不涉及首页推荐流、评论区、自动连播的候选队列。
+过滤只作用于播放页右侧推荐区与主站首页推荐流，不涉及评论区、自动连播的候选队列。
 
 B 站前端改版可能影响 DOM 适配与数据来源。适配点集中在三处，见 `AGENTS.md` 的「已知脆弱点」。
 
 ## 手动验收清单
 
-自动化测试覆盖了规则引擎（149 项）、真实浏览器端到端流程（35 项）与主站首页（18 项），但下面这些需要你本人确认一遍：
+自动化测试覆盖了规则引擎与推广判据（169 项）、真实浏览器端到端流程（35 项）、主站首页（24 项）与播放页推广卡（19 项），但下面这些需要你本人确认一遍：
 
 1. 装好后打开任意播放页，右侧推荐区正常显示，顶部导航栏和播放器都在，没有卡片被无故隐藏
 2. 去预设页导入「清理 AI 批量号」，刷新页面，右侧明显少了一些 AI 批量号视频，剩下的卡片紧挨着排列、没有大片空白
@@ -188,22 +198,24 @@ B 站前端改版可能影响 DOM 适配与数据来源。适配点集中在三�
 10. 在「高级 → 配置备份」点「导出到文件」，应该下载一个 json；改几条规则后再「从文件导入」这个 json，配置应该恢复原样
 11. 打开 `www.bilibili.com` 首页，加一条「播放量 < 1000」或「时长 < 60」，首页推荐里应该少一批卡片，剩下的卡片紧挨着排列、没有整行空白
 12. 去「主站」标签页勾上「直播」和「广告」，刷新首页，直播间和广告卡应该消失；取消勾选后回来
+13. 回到播放页，把右侧滚到底：如果有推广卡或广告横幅，默认应该已经被藏掉；去「播放页」标签页关掉开关，它们应该立刻回来（不用刷新）
 
 ## 开发
 
 不需要 `npm install`（这里没有依赖），只要能跑 `node`（建议 20 以上，脚本用了 `import.meta.dirname`）。
 
 ```
-npm test         # 规则引擎单测（149 项，用真实接口数据快照，纯 Node 不启浏览器）
+npm test         # 规则引擎 + 推广判据单测（169 项，用真实接口数据快照，纯 Node 不启浏览器）
 npm run check    # 所有源文件语法检查
 npm run e2e      # 真实 Chrome + 真实播放页端到端（35 项，需要联网）
+npm run videoad  # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
 npm run save     # 保存可靠性：点保存/切走/关浏览器重启（13 项）
 npm run picker   # 标题拆字选词 → 逗号切分 → 提交（23 项）
-npm run quick    # 页面快捷按钮 + 设置页同步（10 项）
-npm run popup    # popup 命中列表的标题链接（9 项）
+npm run quick    # 页面快捷按钮 + 设置页同步（11 项）
+npm run popup    # popup 命中列表的标题链接（15 项）
 npm run backup   # 导出/导入本地文件（17 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
-npm run home     # 主站首页端到端（18 项，需要联网）
+npm run home     # 主站首页端到端（24 项，需要联网）
 npm run verify   # WBI 签名与接口连通性专项检查
 npm run pack     # 打发布 zip 到 out/bili-recommend-filter-<版本>.zip
 ```

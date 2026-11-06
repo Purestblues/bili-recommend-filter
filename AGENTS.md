@@ -9,15 +9,16 @@ Chrome MV3 扩展，过滤 B 站视频播放页右侧「接下来播放」推荐
 任何改动都要跑通这三条命令，全绿才算完成：
 
 ```
-npm test        # 规则引擎单测（149 项）
+npm test        # 规则引擎单测 + 推广判据（169 项）
 npm run e2e     # 真实 Chrome + 真实 B 站播放页端到端（35 项，需要联网）
 npm run backup  # 导出/导入本地文件（17 项）
-npm run quick   # 页面快捷按钮 + 设置页同步（10 项）
-npm run popup   # popup 命中列表的标题链接（9 项）
+npm run quick   # 页面快捷按钮 + 设置页同步（11 项）
+npm run popup   # popup 命中列表的标题链接（15 项）
 npm run save    # 保存可靠性：点保存/切走/关浏览器重启（13 项）
 npm run picker  # 标题拆字选词（23 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
-npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（18 项，需要联网）
+npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项，需要联网）
+npm run videoad # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
 ```
 
 `npm run verify` 是 WBI 签名与接口连通性的专项检查，改了 wbi.js 或 sw.js 的请求层时跑。`npm run pack` 打发布 zip（见下方「发版」）。
@@ -38,23 +39,25 @@ src/lib/                   纯逻辑，无 DOM、无 chrome API 依赖（default
   presets.js               预设规则包
   defaults.js              设置结构、归一化、chrome.storage 读写封装
   wbi.js                   WBI 签名 + 自实现 md5（service worker 里没有 md5）
+  promo.js                 侧栏推广卡判据（活动页链接 / 运营推荐位 / 打点域 / 广告位 class），纯逻辑
 src/content/
   inject.js                MAIN world。读 window.__INITIAL_STATE__.related（主）+ hook fetch/XHR（备）
   content.js               扫 DOM、按 bvid 关联、判定、摘卡片、悬浮快捷按钮
   content.css              快捷按钮与占位样式
 src/background/sw.js       消息路由、远程抓取（标签/UP频率）、限速队列、缓存、风控退避
-src/options/               规则编辑器（规则/批量关键词/名单/预设/高级/日志）
+src/options/               规则编辑器（规则/批量关键词/名单/预设/播放页/主站/高级/日志）
 src/popup/                 当前页统计、总开关、本页命中记录
 tools/
-  test-rules.mjs           规则引擎单测（149 项），用 fixtures 里的真实接口数据
+  test-rules.mjs           规则引擎单测 + 推广判据（169 项），用 fixtures 里的真实接口数据
   e2e.mjs                  真实 Chrome + 真实播放页的端到端验证（35 项）
   test-backup.mjs          导出/导入本地文件的端到端验证（17 项）
-  test-quick.mjs           真实鼠标悬浮 → 快捷按钮 → 设置页同步的验证（10 项）
-  test-popup-links.mjs     popup 命中列表的标题链接（9 项）
+  test-quick.mjs           真实鼠标悬浮 → 快捷按钮 → 设置页同步的验证（11 项）
+  test-popup-links.mjs     popup 命中列表的标题链接（15 项）
   test-save.mjs            保存可靠性：点保存/切走/重启（13 项）
   test-titlepicker.mjs     标题拆字选词 → 逗号切分 → 提交（23 项）
   test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底（8 项）
-  test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（18 项）
+  test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项）
+  test-videoad.mjs         播放页侧栏推广卡：注入假推广卡 + 真实广告位，验证藏 / 恢复 / 不误伤（19 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
   pack.mjs                 打发布 zip（out/bili-recommend-filter-<版本>.zip），自实现 ZIP 写入，零依赖
   cdp.mjs                  极简 CDP 客户端（无依赖）
@@ -76,6 +79,8 @@ tools/
     probe-download.mjs       下载行为诊断（headless 下会被取消）
     probe-net.mjs            抓页面实际请求，确认数据来源
     probe-state.mjs          定位 SSR 状态对象结构
+    probe-sidead.mjs         打印侧栏里所有非视频链接与右侧容器层级（找推广卡落点）
+    probe-promo-card.mjs     打印广告位（ad-report / ad-floor）与特殊推荐卡的 DOM 结构与祖先链
   cookie-jar.mjs           验证脚本用的最小 cookie jar
   fixtures/                真实接口返回快照
 docs/screenshots/          README 用的截图（对应 out/ 里的原始文件）
@@ -88,7 +93,7 @@ LICENSE                   MIT
 
 **bvid 是唯一稳定锚点。** `relatedSet` 里的 bvid 集合 ≈ 右侧推荐区渲染的卡片集合，用它反查 anchor 就能精确圈定推荐卡片，不需要任何 B 站 class 名。卡片容器的定位用 `findCardRoot()`：从 anchor 往上爬，直到父节点包含其他 bvid 为止——这个算法与 class 名无关，B 站改版也不会坏。实测卡片结构是 `<div class="video-page-card-small">`，每张卡有两个同 bvid 的 anchor（封面 + 标题），靠 `dedupeByCard()` 合并。
 
-**广告卡片不过滤。** 右侧会混入 `ad-report-inner` 的广告卡，它的 bvid 不在 `related` 里，没有元数据，因此不会被当成候选。这是有意为之。
+**广告卡不是「不过滤」，而是不归规则引擎管。** 早期是刻意跳过所有 `ad-report` 广告卡，因为它们没有 bvid、没有 stat，进不了规则判定。现在多了一条独立通道：`src/lib/promo.js` 按推广信号识别（活动页链接 / `specialRecommend` 运营推荐位 / `cm.bilibili.com` 打点 / `ad-report`、`ad-floor`、`advert` 广告位 class），content.js 在播放页侧栏整卡隐藏，开关是「播放页 → 隐藏右侧的运营推广卡与广告横幅」，默认开。详见下文「播放页右侧的推广卡」。
 
 **wbi 接口有风控。** `/x/space/wbi/arc/search` 必须同时满足：wbi 签名（w_rid + wts）+ `dm_img_*` 四个设备指纹参数。缺任何一个都是 `-352 风控校验失败`，只签名不够。dm_img 参数由 content.js 用真实 WebGL 信息生成后传给 SW（真实值比伪造值安全）；被风控时 SW 会换回已验证的静态值重试一次，仍失败则进入指数退避。
 
@@ -158,13 +163,31 @@ LICENSE                   MIT
 
 **测试是独立的。** `npm run home`（24 项）真实打开首页，守的是这六条：首屏不等接口就有候选、标题不是「不感兴趣」、规则能过滤、被藏的是外层 wrapper、类别开关能开能关（含注入的漫画/赛事/推广假卡片）、`home.remote=false` 时零额外请求。播放页那套 `npm run e2e` 断言（右侧列表、related 元数据）在首页完全不适用，不要强行复用。
 
+## 播放页右侧的推广卡
+
+右侧推荐区偶尔会在**第一个位置**换成一张运营推广卡（指向 `/toy/`、`/blackboard/` 活动页），底部还会常驻一条 `ad-report` 广告横幅。用户实测碰到的链接是 `https://www.bilibili.com/toy/mmy-fatfish-earth/index.html?spm_id_from=333.788.specialRecommendByOp.0`。
+
+这些卡没有 bvid、没有 stat，规则引擎的指标全都取不到，所以不能做成规则表里的一行；走的是独立开关：设置页「播放页 → 隐藏右侧的运营推广卡与广告横幅」，存 `settings.video.hidePromo`，默认开。
+
+判据集中在 `src/lib/promo.js`（纯逻辑，单测第 15 节覆盖）：链接侧看 `specialRecommend` / `/toy/` / `/blackboard/` / `/festival/` / `cm.bilibili.com` / `adfloor`；容器侧看 `ad-report` / `ad-floor` / `ad-floor-exp` / `advert`。
+
+保护规则和命中规则同等重要：`promoLinkSignal()` 先过一遍 `/video/BV…`、`/bangumi/play/`、`/cheese/play/`、`live.bilibili.com`、`manga.bilibili.com`、`space.bilibili.com`，命中这些一律返回空——否则右侧的番剧/直播/课程卡会被当广告藏掉。实测页面上还有 `upinfo`、`recommend_more_video` 两类 spm，它们也不在任何推广判据里。
+
+DOM 侧两个必须记住的点。**`promoScope()` 必须比 `listRoot` 大一层**：推广卡可能被塞在 `.next-play`（第一张视频卡的同级容器）里，底部广告横幅则是 `.recommend-list-v1` 的兄弟节点，只在 listRoot 里扫会漏。所以从 listRoot 往上爬到 `[class*="right-container"]` / `[class*="rcmd"]` / `[class*="recommend"]` 这一层。**`promoCardOf()` 的边界信号和 `findCardRoot()` 不同**：推广卡里没有 bvid，所以「父节点里出现 bvid 就停」就是唯一边界（再往上就进真正的推荐列表层），配合 `plausibleCard()` 把关，否则会把 `.rec-list` 甚至整个右侧栏当卡片摘掉。
+
+命中后加 `.brf-hidden`，节点记在 `state.promoHidden`（Map，节点 → 原因），设置变更时 `restoreAll()` 去类恢复，所以关开关不用刷新页面。`state.promoCount` 会报给 popup（「另隐藏 N 张推广卡」）——推广卡没有 bvid，不会出现在命中列表里。
+
+首页不走这条通道：首页有自己的 `applyCategoryToggles()`，`promo` / `ad` 类别开关已经覆盖同样语义。`applyPromoFilter()` 里 `isHomePage()` 直接 return，避免两套机制互相恢复/隐藏。
+
+测试是独立的：`npm run videoad` 真实打开播放页，注入一张 `/toy/` 假推广卡、一张 `ad-report` 假横幅，外加番剧/直播两张对照组，验证「该藏的藏、该恢复的恢复、对照组一张不碰、没把整个列表藏掉」。真实推广卡是偶发投放的，不能指望每次跑测试都碰上，所以假卡片是确定性的那部分；真实广告位如果恰好存在就顺带断言它被藏（不存在则 SKIP）。注意 `tools/e2e.mjs` 的 `BASE_SETTINGS` 里把 `video.hidePromo` 显式关掉了，否则真实广告横幅会进 `.brf-hidden` 计数，让「无规则时不误杀」和「恢复后无残留」两项断言飘。
+
 ## 关键词为什么「加了却不过滤」
 
 两类原因，都已经修了，别再退回去：
 
 **一类是看不见的空白。** 关键词很容易带上首尾空格（手打、粘贴、从拆字面板点进空格都行）。`"女".includes` 和 `"女 ".includes` 是两个词，后者永远匹配不到标题。实测 `海 `（码点 `6d77,20`）在 7 张含「海」的卡片里只拦到 1 张——就是那张标题里真有「海␣」的。现在 `normalizeKeyword()` 在**匹配时**（`asKeywordList`）和**入口处**（options 切分 / picker 提交 / SW 写入）都做归一：纯空白词原样保留（用户确实想过滤空格），有可见字符就去首尾空白，中间空格不动。匹配时也归一这一点很重要——已经存进 storage 的脏数据不用迁移就能生效。
 
-**一类是元数据没覆盖到。** 早期 `collectCandidates()` 是「bvid 不在 `state.related` 里就跳过」，于是元数据没覆盖的卡片永远不会被判定。现在改成以 DOM 为准：已知 `listRoot` → `RECO_ROOTS` → 全页兜底，元数据只负责补字段；匹配不上元数据的走 `readCardFallback()` 从 DOM 抠标题。拿不到的字段是 `null`，会安全跳过对应规则。广告位（`ad-report` / `ad-floor` / `advert`）直接排除。
+**一类是元数据没覆盖到。** 早期 `collectCandidates()` 是「bvid 不在 `state.related` 里就跳过」，于是元数据没覆盖的卡片永远不会被判定。现在改成以 DOM 为准：已知 `listRoot` → `RECO_ROOTS` → 全页兜底，元数据只负责补字段；匹配不上元数据的走 `readCardFallback()` 从 DOM 抠标题。拿不到的字段是 `null`，会安全跳过对应规则。广告位（`ad-report` / `ad-floor` / `advert`）不进候选——它们由推广卡通道处理，不参与规则判定。
 
 自检手段：`BRF_EXPLAIN` 消息会返回每张候选卡的 `title / source / decision / 未命中的词及其码点`，`npm run fallback` 跑这个链路。
 
@@ -179,6 +202,8 @@ LICENSE                   MIT
 卡片文本的播放量解析在 `rules.js` 的 `extractViewFromText()`，按可靠度分四级：带「播放」字样 → 裸数字带万/亿 → 卡片末尾「播放量 弹幕数」两个数字取倒数第二个 → 都失败返回 null。小于一万的播放量在 DOM 里是纯数字（「606」「4368」），不带「万」也不带「播放」，只能靠位置认，所以第三条要求文本里必须有时长串（确认是视频卡片）。这套逻辑有 22 项单测。
 
 DOM 适配集中在 `content.js` 的 `findCardRoot()` / `plausibleCard()` / `readCardFallback()`（两个页面共用）；首页额外靠 `learnHomeRoot()` / `collapseTarget()` / `classifyCard()`；数据来源集中在 `inject.js` 的 `readInitialState()`（SSR 路径）和 `WATCHED` 正则（接口路径，已覆盖首页 feed）；接口集中在 `sw.js` 的 `ENDPOINTS`。B 站改版时按这个顺序查。
+
+推广卡的判据集中在 `src/lib/promo.js` 的 `PROMO_LINK_SIGNALS` 与 `AD_CLASS_RE`。B 站把活动页换到 `/toy/` 之外的新路径、或者改广告位 class 名时，先改这里并补单测；不要又把判据散落回 content.js（那样就只能靠开浏览器手工试）。
 
 首页的三个具体脆弱点：地址可能再变（已经踩过一次 `/` → `/index.html`）、卡面类别标记文案可能变（`classifyCard()` 靠「电影/影视/纪录片/片单」区分影视与番剧）、网格层级可能变（`collapseTarget()` 依赖「卡片外层有一层等高 wrapper」这个结构事实）。
 

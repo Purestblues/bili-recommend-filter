@@ -47,6 +47,9 @@
     engine: null, // rules.js 模块，init 时预加载，兜底解析要用
     catCount: 0, // 主站类别开关当前藏掉了几张非视频卡
     catHidden: new Set(), // 被类别开关藏掉的节点（没有 bvid，不在 removed 里）
+    promoHidden: new Map(), // 播放页侧栏推广卡：节点 -> {reason}
+    promoCount: 0, // 当前藏掉了几张推广卡
+    promo: null, // promo.js 模块（init 时预加载）
     deferredRemote: 0, // 主站因为不在视口内而推迟远程判定的卡片数
   };
 
@@ -672,6 +675,19 @@
     return enginePromise;
   }
 
+  // 推广卡判据同样是 ES module（web_accessible_resources 里已声明）。
+  // 加载失败就退化为「不做推广卡过滤」，宁可漏杀也不能报错。
+  let promoPromise = null;
+  function loadPromo() {
+    if (!promoPromise) {
+      promoPromise = import(chrome.runtime.getURL("src/lib/promo.js")).catch((e) => {
+        log("推广判据加载失败", e);
+        return null;
+      });
+    }
+    return promoPromise;
+  }
+
   function applyBlock(card, item, res) {
     // 先打上完成标记，否则 hide 模式下每轮扫描都会重复记一条日志
     card.dataset.brfDone = "1";
@@ -770,6 +786,15 @@
     }
     state.catHidden.clear();
     state.catCount = 0;
+    // 播放页侧栏推广卡（同样没有 bvid，不在 removed 里）
+    for (const el of state.promoHidden.keys()) {
+      if (el && el.isConnected) {
+        el.classList.remove("brf-hidden");
+        if (el.dataset) delete el.dataset.brfPromo;
+      }
+    }
+    state.promoHidden.clear();
+    state.promoCount = 0;
     for (const el of document.querySelectorAll("[data-brf-done]")) {
       el.dataset.brfDone = "0";
     }
@@ -898,6 +923,151 @@
     return hidden;
   }
 
+  // -------------------------------------------------- 播放页侧栏推广卡
+  //
+  // 右侧推荐区偶尔会在第一个位置插一张运营推广卡（指向 /toy/、/blackboard/ 活动页，
+  // 或带 spm_id_from=333.788.specialRecommendByOp），底部还有 ad-report 广告横幅。
+  // 这些卡没有 bvid、没有 stat，进不了规则引擎，只能按推广信号整卡隐藏。
+  // 判据在 src/lib/promo.js（纯逻辑，有单测）；这里只负责找卡片容器、加隐藏类、能恢复。
+
+  const PROMO_SCOPE_SEL =
+    '[class*="right-container"], [class*="rcmd"], [class*="recommend"], #reco_list, [class*="reco_"], [class*="playlist"], [class*="watch-later"], [class*="watchlater"]';
+  const AD_SELECTOR = '[class*="ad-report"], [class*="ad-floor"], [class*="advert"]';
+
+  /**
+   * 推广卡的扫描范围：从列表容器往上爬到「整个右侧栏」。
+   * 必须比 listRoot 大一层：运营推广卡可能被塞在 .next-play 里（和第一张视频卡同级），
+   * 底部广告横幅则是 .recommend-list-v1 的兄弟节点，只在 listRoot 里扫会漏掉。
+   */
+  function promoScope() {
+    let base = listRoot && listRoot.isConnected ? listRoot : null;
+    if (!base) {
+      for (const sel of RECO_ROOTS) {
+        try {
+          base = document.querySelector(sel);
+        } catch {
+          base = null;
+        }
+        if (base) break;
+      }
+    }
+    if (!base) return null;
+    let pick = null;
+    let n = base;
+    for (let i = 0; i < 4 && n && n !== document.body && n !== document.documentElement; i++) {
+      try {
+        if (n.matches && n.matches(PROMO_SCOPE_SEL)) pick = n;
+      } catch {
+        /* 选择器不兼容就算了 */
+      }
+      n = n.parentElement;
+    }
+    return pick || base;
+  }
+
+  /**
+   * 从推广链接往上找卡片容器。
+   *
+   * 与 findCardRoot 的区别：目标卡里**没有 bvid**，所以「父节点里出现 bvid 就停」
+   * 就是唯一的边界信号——再往上就是真正的推荐列表层，不能摘。
+   * 全程用 plausibleCard 把关（高度/宽度/不含导航与播放器），宁可漏杀不可摘错。
+   */
+  function promoCardOf(anchor, scope) {
+    if (!anchor) return null;
+    let pick = null;
+    let node = anchor;
+    for (let i = 0; i < 10; i++) {
+      const p = node.parentElement;
+      if (!p || p === scope || p === document.body || p === document.documentElement) break;
+      if (p === listRoot || (listRoot && p.contains(listRoot))) break;
+      if (p.children.length > 40) break;
+      if (bvidsIn(p).size !== 0) break; // 进列表层了
+      if (!plausibleCard(p)) break;
+      pick = p;
+      node = p;
+    }
+    if (pick) return pick;
+    return plausibleCard(anchor) ? anchor : null;
+  }
+
+  /** 广告位容器：从内层往上合并到最外层的 ad-report / ad-floor 盒子 */
+  function promoAdBlock(el, scope) {
+    const promo = state.promo;
+    if (!promo || !el) return null;
+    let pick = el;
+    for (let i = 0; i < 4; i++) {
+      const p = pick.parentElement;
+      if (!p || p === scope || p === document.body || p === document.documentElement) break;
+      if (p === listRoot || (listRoot && p.contains(listRoot))) break;
+      if (!promo.isAdClass(p.className)) break;
+      if (!plausibleCard(p)) break;
+      pick = p;
+    }
+    return plausibleCard(pick) ? pick : null;
+  }
+
+  /** 本轮应该藏哪些节点。返回 Map<元素, 原因> */
+  function promoCardTargets() {
+    const promo = state.promo;
+    const scope = promoScope();
+    if (!promo || !scope) return new Map();
+    const found = new Map();
+
+    // 1) 推广链接：活动页 / 运营推荐位 / 打点域
+    for (const a of scope.querySelectorAll("a[href]")) {
+      const sig = promo.promoLinkSignal(a.getAttribute("href"));
+      if (!sig) continue;
+      const card = promoCardOf(a, scope);
+      if (card && !found.has(card)) found.set(card, sig);
+    }
+
+    // 2) 广告位 class：右侧底部那种没有可识别链接的横幅
+    for (const el of scope.querySelectorAll(AD_SELECTOR)) {
+      const block = promoAdBlock(el, scope);
+      if (block && !found.has(block)) found.set(block, promo.adReason(block.className));
+    }
+
+    // 只留最外层：广告位里层往往还嵌着 ad-report-inner 之类的节点
+    const list = [...found.entries()];
+    return new Map(list.filter(([el]) => !list.some(([other]) => other !== el && other.contains(el))));
+  }
+
+  /**
+   * 按设置对齐推广卡：该藏的藏、该恢复的恢复（关掉开关不用刷新页面）。
+   * 只在播放页 / 列表页跑：首页有自己的类别开关（applyCategoryToggles）。
+   */
+  function applyPromoFilter() {
+    const s = state.settings;
+    if (!s || s.enabled === false) return 0;
+    if (isHomePage()) return 0;
+    const want = !s.video || s.video.hidePromo !== false;
+    const targets = want ? promoCardTargets() : new Map();
+
+    for (const el of [...state.promoHidden.keys()]) {
+      if (!targets.has(el) || !el.isConnected) {
+        if (el && el.classList) {
+          el.classList.remove("brf-hidden");
+          if (el.dataset) delete el.dataset.brfPromo;
+        }
+        state.promoHidden.delete(el);
+      }
+    }
+
+    let n = 0;
+    for (const [el, reason] of targets) {
+      if (!el || !el.isConnected) continue;
+      if (!state.promoHidden.has(el)) {
+        if (el.dataset) el.dataset.brfPromo = "1";
+        el.classList.add("brf-hidden");
+        state.promoHidden.set(el, { reason });
+        log("隐藏推广卡", reason, String(el.className || "").slice(0, 40));
+      }
+      n++;
+    }
+    state.promoCount = n;
+    return n;
+  }
+
   // ------------------------------------------------------------ 扫描循环
 
   let scanTimer = null;
@@ -921,6 +1091,8 @@
     // 先把非视频卡（番剧/影视/课程/直播/广告）按开关对齐，它们没有 bvid，不进候选
     if (isHomePage()) applyCategoryToggles();
     const candidates = collectCandidates();
+    // 推广卡没有 bvid，不进候选；放在 collectCandidates 之后是为了用上刚学到的 listRoot
+    if (!isHomePage()) applyPromoFilter();
     // 全部被摘掉后 candidates 会变 0，这时保留上一次的数值，避免 popup 显示「推荐条数 0」
     if (candidates.length) state.scanned = candidates.length;
     for (const { card, bvid } of candidates) {
@@ -1284,6 +1456,8 @@
     sendFingerprintOnce();
     // 预加载规则引擎：兜底解析（extractViewFromText 等）需要它
     state.engine = await loadEngine();
+    // 推广卡判据：侧栏推广卡没有 bvid，规则引擎用不上，靠它识别
+    state.promo = await loadPromo();
     const s = await ask("GET_SETTINGS");
     state.settings = s || null;
 
@@ -1333,6 +1507,8 @@
       state.remoteUsed = 0;
       state.filtered.clear();
       state.removed.clear();
+      state.promoHidden.clear();
+      state.promoCount = 0;
       listRoot = null; // 新页面的列表容器可能换了
       state.relatedAt = 0;
       hideToolbar(true); // 换页了，强制收起
@@ -1353,6 +1529,7 @@
           hasRelated: state.related.size > 0,
           isHome: isHomePage(),
           categoriesHidden: state.catCount || 0,
+          promoHidden: state.promoCount || 0,
           deferredRemote: state.deferredRemote || 0,
           hits: [...state.filtered.entries()].slice(0, 30).map(([bvid, reason]) => ({
             bvid,

@@ -87,9 +87,12 @@ async function render() {
       const base = state.scanned ? "已接管首页推荐流" : "等待首页推荐加载…（可用「重新扫描」）";
       line.textContent = cats ? `${base}（另按类别隐藏 ${cats} 张）` : base + "。";
     } else {
-      line.textContent = state.hasRelated
+      const base = state.hasRelated
         ? "已接管本页右侧推荐区。"
         : "等待推荐数据加载…（可用「重新扫描」）";
+      // 推广卡没有 bvid，不在下面的命中列表里，单独报一个数才看得出它在干活
+      const promo = state.promoHidden || 0;
+      line.textContent = promo ? `${base}（另隐藏 ${promo} 张推广卡）` : base;
     }
   }
 

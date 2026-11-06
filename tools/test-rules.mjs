@@ -23,6 +23,7 @@ import {
 } from "../src/lib/rules.js";
 import { PRESETS, presetToRules } from "../src/lib/presets.js";
 import { normalizeSettings } from "../src/lib/defaults.js";
+import { promoLinkSignal, isAdClass, adReason } from "../src/lib/promo.js";
 
 let pass = 0;
 let fail = 0;
@@ -417,6 +418,58 @@ const spaceRule = { id: "sp", enabled: true, metric: "titleKeyword", op: "contai
 check("纯空格词仍能匹配含空格的标题", evaluate(titleWithSpace, { ...baseCtx, rules: [spaceRule] }).decision === "block");
 const noSpaceTitle = { ...nullItem, bvid: "BVnsp", title: "没有空格的标题" };
 check("纯空格词不会匹配无空格标题", evaluate(noSpaceTitle, { ...baseCtx, rules: [spaceRule] }).decision === "pass");
+// ---------------------------------------------------------------------------
+section("15. 播放页推广卡判据（没有 bvid，走不了规则引擎）");
+// 用户实测碰到的广告卡：推荐列表第一个位置，指向玩具活动页
+const USER_AD =
+  "https://www.bilibili.com/toy/mmy-fatfish-earth/index.html?spm_id_from=333.788.specialRecommendByOp.0";
+check("用户实测的 /toy/ 活动页广告被判为推广", promoLinkSignal(USER_AD) !== "", promoLinkSignal(USER_AD));
+check(
+  "命中的原因能说清是运营推荐位或活动页",
+  /specialRecommend|toy/.test(promoLinkSignal(USER_AD)),
+  promoLinkSignal(USER_AD),
+);
+check(
+  "只有 spm 打点、路径不明显的活动页也能命中",
+  promoLinkSignal("https://www.bilibili.com/blackboard/x.html?spm_id_from=333.788.specialRecommendByOp.3") !== "",
+);
+check(
+  "右侧底部广告横幅（blackboard + adfloor）能被认出",
+  promoLinkSignal(
+    "https://www.bilibili.com/blackboard/era/IVEiFFv5UqhMDmCu.html?spm_id_from=333.788.right_bottom.adfloor-3038.click",
+  ) !== "",
+);
+check("cm.bilibili.com 推广打点域能认出", promoLinkSignal("https://cm.bilibili.com/cm/api/fees/pc/sync?ad_id=1") !== "");
+check("festival 活动页能认出", promoLinkSignal("https://www.bilibili.com/festival/2026x?spm_id_from=1") !== "");
+
+// 保护规则：正常内容一张都不能误藏
+check(
+  "普通视频链接不算推广（哪怕带 specialRecommend 参数）",
+  promoLinkSignal("https://www.bilibili.com/video/BV1xx411c7mD/?spm_id_from=333.788.specialRecommendByOp.0") === "",
+);
+check("普通推荐链接不算推广", promoLinkSignal("/video/BV1xx411c7mD/?spm_id_from=333.788.recommend_more_video.0") === "");
+check("番剧链接不碰", promoLinkSignal("https://www.bilibili.com/bangumi/play/ep123456") === "");
+check("直播链接不碰", promoLinkSignal("https://live.bilibili.com/123") === "");
+check("课程链接不碰", promoLinkSignal("https://www.bilibili.com/cheese/play/ss123") === "");
+check("空间链接不碰", promoLinkSignal("//space.bilibili.com/1259252171/") === "");
+check("漫画链接不碰", promoLinkSignal("https://manga.bilibili.com/detail/mc34254") === "");
+check("空链接 / javascript: 不算", promoLinkSignal("") === "" && promoLinkSignal("javascript:void(0)") === "");
+
+check(
+  "广告位 class 能认出（含内层 ad-report-inner）",
+  isAdClass("ad-report ad-floor-exp right-bottom-banner") && isAdClass("ad-report-inner") && isAdClass("advert"),
+);
+check(
+  "普通 class 不误判",
+  !isAdClass("video-page-card-small") && !isAdClass("ad") && !isAdClass("loading") && !isAdClass(""),
+);
+check("adReason 能说清是哪类广告位", adReason("ad-report ad-floor-exp").includes("ad-floor"), adReason("ad-report ad-floor-exp"));
+
+// 设置归一：旧数据里没有 video 字段也要按「默认开」处理
+check("设置默认：video.hidePromo 默认开", normalizeSettings(null).video.hidePromo === true);
+check("旧设置（没有 video 字段）也是默认开", normalizeSettings({ rules: [] }).video.hidePromo === true);
+check("显式关掉不会被归一成开", normalizeSettings({ video: { hidePromo: false } }).video.hidePromo === false);
+
 // ---------------------------------------------------------------------------
 console.log(`\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed)`);
 process.exit(fail === 0 ? 0 : 1);

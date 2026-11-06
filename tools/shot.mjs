@@ -78,7 +78,7 @@ async function shot(url, file, { width = 1280, height = 900, preset = false, tab
 
 const optsUrl = `chrome-extension://${extId}/src/options/options.html`;
 await shot(optsUrl, path.join(OUT, "options-rules.png"), { preset: true, height: 1100 });
-for (const [tab, h] of [["keywords", 900], ["lists", 1000], ["presets", 1100], ["advanced", 1000], ["log", 900]]) {
+for (const [tab, h] of [["keywords", 900], ["lists", 1000], ["presets", 1100], ["video", 420], ["advanced", 1000], ["log", 900]]) {
   await shot(optsUrl, path.join(OUT, `options-${tab}.png`), { preset: true, tab, height: h });
 }
 await shot(`chrome-extension://${extId}/src/popup/popup.html`, path.join(OUT, "popup.png"), { width: 340, height: 620 });

@@ -779,7 +779,27 @@ function renderAll() {
   renderKeywords();
   renderLists();
   renderAdvanced();
+  renderVideo();
   renderHome();
+}
+
+// ------------------------------------------------------------------ 播放页
+//
+// 侧栏推广卡没有 bvid，规则引擎无法判定，只能用一个开关控制（见 src/lib/promo.js）。
+
+function initVideo() {
+  const box = $("#videoHidePromo");
+  if (box) {
+    box.addEventListener("change", (e) => {
+      settings.video.hidePromo = e.target.checked;
+      scheduleSave();
+    });
+  }
+}
+
+function renderVideo() {
+  const box = $("#videoHidePromo");
+  if (box) box.checked = !settings.video || settings.video.hidePromo !== false;
 }
 
 // ------------------------------------------------------------------ 主站
@@ -852,6 +872,7 @@ async function init() {
   initKeywords();
   initLists();
   initAdvanced();
+  initVideo();
   initHome();
   initLog();
   initExternalSync();

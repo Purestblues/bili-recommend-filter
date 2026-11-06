@@ -11,7 +11,7 @@
       <img src="../../assets/icon48.png" alt="" width="28" height="28" />
       <div>
         <h1>B站推荐过滤</h1>
-        <p class="sub">过滤视频播放页右侧「接下来播放」的推荐内容</p>
+        <p class="sub">过滤播放页右侧推荐、首页推荐流与运营推广卡</p>
       </div>
     </div>
     <div class="top-actions">
@@ -31,6 +31,7 @@
     <button class="tab" data-tab="keywords">批量关键词</button>
     <button class="tab" data-tab="lists">白名单 / 黑名单</button>
     <button class="tab" data-tab="presets">预设规则包</button>
+    <button class="tab" data-tab="video">播放页</button>
     <button class="tab" data-tab="home">主站</button>
     <button class="tab" data-tab="advanced">高级</button>
     <button class="tab" data-tab="log">命中日志</button>
@@ -157,6 +158,30 @@
         </div>
       </div>
       <div class="preset-grid" id="presetGrid"></div>
+    </section>
+
+    <!-- 播放页 -->
+    <section class="panel" id="panel-video">
+      <div class="panel-head">
+        <div>
+          <h2>播放页</h2>
+          <p class="hint">
+            右侧推荐区偶尔会在第一个位置换成运营推广卡（指向 /toy/、/blackboard/ 这类站内活动页），右侧底部还有一条广告横幅。
+            这些卡没有 bvid，也没有播放量、时长、UP 这些字段，规则引擎判定不了，所以只能在下面按推广信号整卡隐藏——这也是它们不出现在「过滤规则」表里的原因。
+          </p>
+        </div>
+      </div>
+
+      <div class="form">
+        <div class="field">
+          <label class="check"><input type="checkbox" id="videoHidePromo" /> 隐藏右侧的运营推广卡与广告横幅</label>
+          <p class="hint">
+            默认开。判据：链接指向活动页、带 specialRecommend 运营推荐位、带 cm.bilibili.com 推广打点，
+            或者容器带 ad-report / ad-floor / advert 广告位标记。指向普通视频、番剧、直播、课程、漫画的卡片一律不碰，
+            避免把用户想看的番剧或直播当成广告藏掉。关掉开关后刷新页面即可恢复。
+          </p>
+        </div>
+      </div>
     </section>
 
     <!-- 主站 -->

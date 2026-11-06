@@ -146,6 +146,11 @@ const BASE_SETTINGS = {
   whitelist: { upMids: [], upNames: [], titleKeywords: [], tagKeywords: [] },
   quickButtons: true,
   logLimit: 200,
+  // 这个套件只量「视频卡片」的过滤效果，所以把侧栏推广卡过滤关掉：
+  // 否则真实的广告横幅也会被 .brf-hidden 藏掉，hiddenCards 的基线和
+  // 「恢复默认后没有残留隐藏类」两项断言就会因为一个无关功能而飘。
+  // 推广卡单独由 tools/test-videoad.mjs 守。
+  video: { hidePromo: false },
 };
 
 const ALL_RULE = {

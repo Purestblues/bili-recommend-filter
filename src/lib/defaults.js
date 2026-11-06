@@ -45,6 +45,17 @@ export const DEFAULT_SETTINGS = {
   logLimit: 200,
 
   // ------------------------------------------------------------------
+  // 播放页 / 列表页右侧侧边栏
+  //
+  // 为什么需要单独一组：右侧偶尔会在第一个位置插一张运营推广卡（指向 /toy/、
+  // /blackboard/ 活动页，或带 specialRecommend 打点），底部还有广告横幅。这些卡
+  // 没有 bvid、没有 stat，规则引擎判定不了，只能按推广信号整卡隐藏。
+  // 默认开：它们本来就是广告，不存在「用户想看这个」的场景。
+  video: {
+    hidePromo: true,
+  },
+
+  // ------------------------------------------------------------------
   // 主站（www.bilibili.com 首页推荐流）
   //
   // 为什么单独一组而不是复用上面的字段：播放页右侧是「一个列表」，首页是
@@ -103,9 +114,16 @@ export function normalizeSettings(raw) {
   s.likeRateMinView = Number(s.likeRateMinView) || 0;
   s.maxRemotePerPage = Number(s.maxRemotePerPage) || 0;
   s.logLimit = Number(s.logLimit) || DEFAULT_SETTINGS.logLimit;
+  s.video = normalizeVideo(raw?.video);
   s.home = normalizeHome(raw?.home);
   s.version = 1;
   return s;
+}
+
+/** 播放页字段补齐：旧设置里没有 video，按默认开处理 */
+function normalizeVideo(raw) {
+  const v = raw && typeof raw === "object" ? raw : {};
+  return { hidePromo: v.hidePromo !== false };
 }
 
 /** 主站字段补齐：旧设置里没有 home，也不能让它变成 undefined */
