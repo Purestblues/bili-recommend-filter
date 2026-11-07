@@ -76,9 +76,9 @@ const resetKw = async () => {
   await sleep(300);
 };
 
-/** 悬浮到某张卡片 */
-async function hoverCard(index = 0) {
-  const pos = await evaluate(
+/** 右侧推荐区的卡片坐标（带标题文本，方便挑一张能拆字的） */
+async function cardPositions() {
+  return evaluate(
     cdp,
     page.sid,
     `(() => {
@@ -91,11 +91,24 @@ async function hoverCard(index = 0) {
         const r = a.getBoundingClientRect();
         if (r.width < 40 || r.height < 20 || r.top < 80 || r.top > 880 || r.left < 900) continue;
         seen.add(m[1]);
-        cards.push({ x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) });
+        const card = a.closest('.video-page-card-small, .card-box') || a.parentElement;
+        cards.push({ x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2), text: (card.innerText || '') });
       }
-      return cards[${index}] || null;
+      return cards;
     })()`,
   );
+}
+
+/**
+ * 悬浮到某张卡片。
+ * 标题是随推荐内容天天变的，所以要挑一张「汉字够拆」的卡——不然碰上全英文标题
+ * （实测出现过 "Gemini 4 Carbon vs Gemini Argon vs GPT-6 Astra"），拆字用例必然失败。
+ */
+async function hoverCard(index = 0) {
+  const cards = await cardPositions();
+  const hanCount = (t) => ([...String(t || '')].filter((ch) => /\p{Script=Han}/u.test(ch)).length);
+  const usable = cards.filter((c) => hanCount(c.text) >= 4);
+  const pos = (usable.length ? usable : cards)[index] || null;
   if (!pos) return null;
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pos.x, y: pos.y, button: "none" }, page.sid);
   await sleep(250);

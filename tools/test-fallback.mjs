@@ -1,6 +1,10 @@
 // 验证：
 //   1) 带尾空格的关键词在真实页面上仍然生效
 //   2) bvid 不在元数据集合里的卡片，也能被关键词判定并隐藏（回归：以前会被直接跳过）
+//   3) 元数据晚到（卡片先走 DOM 兜底判过一次）时会自动重判
+//      回归：屏蔽了某个 UP，刷新页面后又出现，在 popup 里点一下重新扫描才消失
+//   4) 右侧第一张卡（单独包在 .next-play 里）也进候选
+//      回归：第一张卡永远过滤不掉，哪怕 UP 已在黑名单里
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -24,6 +28,7 @@ const check = (n, c, d = "") => {
     console.log(`  FAIL  ${n}${d ? "  → " + d : ""}`);
   }
 };
+const skip = (n, why) => console.log(`  SKIP  ${n}  (${why})`);
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "brf-fb-"));
 const proc = spawn(
@@ -57,8 +62,9 @@ const BASE = {
 const extSid = await newPage(`chrome-extension://${extId}/src/options/options.html`);
 await sleep(1800);
 
-const seed = async (rules) => {
-  await evaluate(cdp, extSid, `chrome.storage.local.set({brf_settings: ${JSON.stringify({ ...BASE, rules })}})`);
+const seed = async (rules) => seedSettings({ rules });
+const seedSettings = async (patch) => {
+  await evaluate(cdp, extSid, `chrome.storage.local.set({brf_settings: ${JSON.stringify({ ...BASE, ...patch })}})`);
   await sleep(400);
 };
 
@@ -148,6 +154,116 @@ await sleep(3200);
 const ex4 = await explain();
 const hidden = ex4.cards.filter((c) => c.hiddenByUs).length;
 check("恢复后没有残留隐藏卡片", hidden === 0, String(hidden));
+
+console.log("\n== 5. 元数据晚到 → 自动重判（回归：屏蔽的 UP 刷新后还在） ==");
+// 造一张「扩展完全没元数据」的卡片：先按黑名单判一次（拿不到 mid → 放过），
+// 再冒充 inject.js 发一条 related 消息把 mid 补上，看它会不会自己重判。
+const LATE_BVID = "BV1fb0000002";
+const LATE_MID = 99000001;
+await seedSettings({ blockedUps: { mids: [String(LATE_MID)], names: [] } });
+const lateInjected = await evaluate(
+  cdp,
+  pageSid,
+  `(() => {
+    const counts = new Map();
+    for (const n of document.querySelectorAll('.video-page-card-small')) {
+      const p = n.parentElement;
+      if (p) counts.set(p, (counts.get(p) || 0) + 1);
+    }
+    let root = null, best = 0;
+    for (const [p, n] of counts) if (n > best) { root = p; best = n; }
+    if (!root) root = document.body;
+    const box = document.createElement('div');
+    box.className = 'video-page-card-small brf-fake-late';
+    box.innerHTML = '<a href="https://www.bilibili.com/video/${LATE_BVID}/"><p class="title">晚到元数据测试标题</p><span class="up-name"><span class="name">省略号截断的UP…</span></span><span class="duration">02:34</span></a>';
+    root.appendChild(box);
+    return root.className;
+  })()`,
+);
+await sleep(3000);
+const lateBefore = await evaluate(
+  cdp,
+  pageSid,
+  `(() => { const n = document.querySelector('.brf-fake-late'); return n ? { hidden: n.classList.contains('brf-hidden'), done: n.dataset.brfDone || '' } : null; })()`,
+);
+console.log(`      假卡片挂在 ${lateInjected} 上，补元数据前: hidden=${lateBefore?.hidden} done=${lateBefore?.done || "-"}`);
+check("没有 mid 时不会被误杀（先判成通过）", lateBefore && lateBefore.hidden === false, JSON.stringify(lateBefore));
+check("这时已经打上完成标记（旧实现从此不再重判）", lateBefore?.done === "1", String(lateBefore?.done));
+
+// 冒充 inject.js：window.postMessage 是 content script 收元数据的唯一通道
+await evaluate(
+  cdp,
+  pageSid,
+  `window.postMessage({ __BRF__: true, type: 'related', source: 'test', items: [{
+     bvid: '${LATE_BVID}', title: '晚到元数据测试标题', duration: 154, pubdate: 1790000000,
+     owner: { mid: ${LATE_MID}, name: '假UP' }, stat: { view: 123456, like: 1000, coin: 10, favorite: 20, reply: 5 }, tname: '测试'
+   }] }, location.origin)`,
+);
+await sleep(3000);
+const lateAfter = await evaluate(
+  cdp,
+  pageSid,
+  `(() => { const n = document.querySelector('.brf-fake-late'); return n ? { hidden: n.classList.contains('brf-hidden') } : null; })()`,
+);
+const ex5 = await explain();
+const lateCard = ex5.cards.find((c) => c.bvid === LATE_BVID);
+console.log(`      补元数据后: hidden=${lateAfter?.hidden} source=${lateCard?.source} decision=${lateCard?.decision}`);
+check("元数据补齐后卡片被重判并隐藏", lateAfter?.hidden === true, JSON.stringify(lateAfter));
+check(
+  "重判用的是接口元数据（能按 mid 命中黑名单）",
+  String(lateCard?.reason || "").includes(String(LATE_MID)),
+  String(lateCard?.reason || ""),
+);
+await evaluate(cdp, pageSid, `document.querySelectorAll('.brf-fake-late').forEach((n) => n.remove())`);
+
+console.log("\n== 6. 右侧第一张卡（.next-play 里那张）也进候选 ==");
+const firstBvid = await evaluate(
+  cdp,
+  pageSid,
+  `(() => {
+     const a = document.querySelector('.next-play a[href*="/video/BV"]');
+     if (!a) return '';
+     const m = (a.getAttribute('href') || '').match(/\\/video\\/(BV[0-9A-Za-z]+)/);
+     return m ? m[1] : '';
+   })()`,
+);
+await seed([]);
+await sleep(2500);
+if (firstBvid) {
+  const ex6 = await explain();
+  check("第一张卡进入了候选集合", ex6.cards.some((c) => c.bvid === firstBvid), firstBvid);
+  // 用一条全杀规则验证它真的会被隐藏（不是只进候选不处理）
+  await seed([{ id: "all", enabled: true, metric: "view", op: "gte", value: 0, value2: "", note: "", presetId: null }]);
+  await sleep(3000);
+  const firstHidden = await evaluate(
+    cdp,
+    pageSid,
+    `(() => {
+       const a = document.querySelector('.next-play a[href*="/video/BV"]');
+       if (!a) return null;
+       const card = a.closest('.video-page-card-small') || a.closest('.card-box');
+       return card ? card.classList.contains('brf-hidden') : null;
+     })()`,
+  );
+  check("第一张卡真的被隐藏", firstHidden === true, String(firstHidden));
+  await seed([]);
+  await sleep(2500);
+  const firstRestored = await evaluate(
+    cdp,
+    pageSid,
+    `(() => {
+       const a = document.querySelector('.next-play a[href*="/video/BV"]');
+       if (!a) return null;
+       const card = a.closest('.video-page-card-small') || a.closest('.card-box');
+       return card ? !card.classList.contains('brf-hidden') : null;
+     })()`,
+  );
+  check("关掉规则后第一张卡恢复", firstRestored === true, String(firstRestored));
+} else {
+  skip("第一张卡候选", "页面上没有 .next-play（可能是不带该模块的页面形态）");
+  skip("第一张卡真的被隐藏", "同上");
+  skip("关掉规则后第一张卡恢复", "同上");
+}
 
 console.log(`\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed)`);
 cdp.close();

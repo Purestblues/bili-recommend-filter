@@ -10,13 +10,13 @@ Chrome MV3 扩展，过滤 B 站视频播放页右侧「接下来播放」推荐
 
 ```
 npm test        # 规则引擎单测 + 推广判据（169 项）
-npm run e2e     # 真实 Chrome + 真实 B 站播放页端到端（35 项，需要联网）
+npm run e2e     # 真实 Chrome + 真实 B 站播放页端到端（36 项，需要联网）
 npm run backup  # 导出/导入本地文件（17 项）
-npm run quick   # 页面快捷按钮 + 设置页同步（11 项）
+npm run quick   # 页面快捷按钮 + 设置页同步（15 项）
 npm run popup   # popup 命中列表的标题链接（15 项）
 npm run save    # 保存可靠性：点保存/切走/关浏览器重启（13 项）
 npm run picker  # 标题拆字选词（23 项）
-npm run fallback # 关键词首尾空格 + 元数据缺失兜底（8 项）
+npm run fallback # 关键词首尾空格 + 元数据缺失兜底 + 晚到重判 + 第一张卡（15 项）
 npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项，需要联网）
 npm run videoad # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
 ```
@@ -49,13 +49,13 @@ src/options/               规则编辑器（规则/批量关键词/名单/预�
 src/popup/                 当前页统计、总开关、本页命中记录
 tools/
   test-rules.mjs           规则引擎单测 + 推广判据（169 项），用 fixtures 里的真实接口数据
-  e2e.mjs                  真实 Chrome + 真实播放页的端到端验证（35 项）
+  e2e.mjs                  真实 Chrome + 真实播放页的端到端验证（36 项）
   test-backup.mjs          导出/导入本地文件的端到端验证（17 项）
-  test-quick.mjs           真实鼠标悬浮 → 快捷按钮 → 设置页同步的验证（11 项）
+  test-quick.mjs           真实鼠标悬浮 → 快捷按钮 → 设置页同步 + 当前视频不弹浮窗（15 项）
   test-popup-links.mjs     popup 命中列表的标题链接（15 项）
   test-save.mjs            保存可靠性：点保存/切走/重启（13 项）
   test-titlepicker.mjs     标题拆字选词 → 逗号切分 → 提交（23 项）
-  test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底（8 项）
+  test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底 + 元数据晚到重判 + 第一张卡（15 项）
   test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项）
   test-videoad.mjs         播放页侧栏推广卡：注入假推广卡 + 真实广告位，验证藏 / 恢复 / 不误伤（19 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
@@ -81,6 +81,10 @@ tools/
     probe-state.mjs          定位 SSR 状态对象结构
     probe-sidead.mjs         打印侧栏里所有非视频链接与右侧容器层级（找推广卡落点）
     probe-promo-card.mjs     打印广告位（ad-report / ad-floor）与特殊推荐卡的 DOM 结构与祖先链
+    probe-firstcard.mjs      诊断「第一张卡（.next-play）不进候选」
+    probe-blacklist-reload.mjs  诊断「黑名单 UP 刷新后又出现，重扫才消失」
+    probe-recstructure.mjs   打印右侧推荐区容器层级（.next-play / .rec-list / .recommend-list-v1）
+    probe-nav-hidden.mjs     诊断「刷新后顶部导航被藏」（含 /list 页面，BRF_URL 环境变量指定地址）
   cookie-jar.mjs           验证脚本用的最小 cookie jar
   fixtures/                真实接口返回快照
 docs/screenshots/          README 用的截图（对应 out/ 里的原始文件）
@@ -108,6 +112,12 @@ LICENSE                   MIT
 **命中后的处理默认是 CSS 隐藏，不是删节点。** 这一条是踩坑换来的：`card.remove()` 会让 B 站框架在下次 patch 时找不到节点，抛 `Script error`，表现为页面重新渲染、播放中断。实测证据在 `tools/diagnostics/probe-hydration.mjs`：remove 模式有 `err@2xxx:Script error.`，hide 模式没有。`display:none` 在视觉上和删除完全等价（列表照样上移、不留空隙），但不改 DOM 结构，框架不会错乱。`action: "remove"` 保留给用户手动选，但默认值是 `hide`，不要改回去。
 
 被隐藏的节点和它的父节点/位置记在 `state.removed` 里，设置变更时能复原重判——这是「调规则不用刷新页面」的基础。注意 `restoreAll()` 里要先判 `isConnected`，hide 模式下节点本来就在 DOM 里，不能乱挪位置。
+
+**候选集合必须带上 `.next-play` 里的第一张卡。** 上一段说的是「别把第一张卡的容器算大」，这一段是反向的坑：`learnListRoot()` 学到的是装其余卡片的 `.rec-list`，而第一张卡挂在它的兄弟节点 `.next-play` 里（实测 `.recommend-list-v1 > [.next-play, .rec-list, .rec-footer]`）。只扫 `listRoot` 的话第一张卡永远不进候选，表现就是「这个 UP 明明已在黑名单里，右侧第一张卡却始终过滤不掉」。现在 `collectCandidates()` 主路径用 `recScope(listRoot)`：往上带一层父节点，但必须仍然是一列（`isColumn()`，宽度 ≤ 视口 62%），防止爬进主内容区。首页网格不扩大（外面还有别的模块）。
+
+**元数据晚到必须重判，否则黑名单刷新后失效。** 卡片可能在 SSR / 接口数据到达前就用 `readCardFallback()` 判过一次：那时 `ownerMid` 是空、UP 名可能被省略号截断，黑名单匹配不上，卡片被判通过并打上 `brf-done="1"`。之后元数据补齐，扫描循环看到 done 就跳过——用户看到的就是「屏蔽的 UP 刷新后又出现，在 popup 点一下重新扫描才消失」。现在 `ingestRelated()` 把「新出现的 bvid」和「补齐了决定性字段（mid/标题/播放量等）的 bvid」记进 `state.rejudge`，`applyPendingRejudge()` 在每轮扫描里把它们退回未判状态（已隐藏的先复原）再重判。第一包数据到达时不再全量 `restoreAll()`，只重判这些卡片。SPA 换页时清空 `rejudge`。
+
+**当前播放视频的识别要兼容 `/list/*` 地址。** `/list/watchlater?bvid=BVxxx&oid=...` 的路径里没有 bvid，`currentPageBvid()` 以前只认 `/video/BVxxx`，返回空串导致 `bvid !== pageBvid` 的排除失效——悬停自己正在看的视频标题也会弹出「屏蔽此UP」浮窗。现在额外从 `?bvid=` 取。测试里真实 `/list` 页未登录是登录墙，所以用 pushState 换地址 + 注入同形状标题锚点来验证（见 `npm run quick` 第 5 节）。
 
 **卡片定位不能只靠结构判据。** B 站把右侧列表的**第一张卡片**单独包在 `.next-play` 里（和「接下来播放」标题、分割线同级），其余卡片才是列表容器的直接子元素。所以「父节点里出现第二个 bvid 就停」这个纯结构算法在第一张卡片上会失效：`.next-play` 里只有一个 bvid，算法继续往上爬，最后把 `.next-play` 甚至更大的容器当卡片摘掉，表现就是右侧推荐区整块消失、顶部导航栏消失。
 
@@ -173,7 +183,7 @@ LICENSE                   MIT
 
 保护规则和命中规则同等重要：`promoLinkSignal()` 先过一遍 `/video/BV…`、`/bangumi/play/`、`/cheese/play/`、`live.bilibili.com`、`manga.bilibili.com`、`space.bilibili.com`，命中这些一律返回空——否则右侧的番剧/直播/课程卡会被当广告藏掉。实测页面上还有 `upinfo`、`recommend_more_video` 两类 spm，它们也不在任何推广判据里。
 
-DOM 侧两个必须记住的点。**`promoScope()` 必须比 `listRoot` 大一层**：推广卡可能被塞在 `.next-play`（第一张视频卡的同级容器）里，底部广告横幅则是 `.recommend-list-v1` 的兄弟节点，只在 listRoot 里扫会漏。所以从 listRoot 往上爬到 `[class*="right-container"]` / `[class*="rcmd"]` / `[class*="recommend"]` 这一层。**`promoCardOf()` 的边界信号和 `findCardRoot()` 不同**：推广卡里没有 bvid，所以「父节点里出现 bvid 就停」就是唯一边界（再往上就进真正的推荐列表层），配合 `plausibleCard()` 把关，否则会把 `.rec-list` 甚至整个右侧栏当卡片摘掉。
+DOM 侧三个必须记住的点。**`promoScope()` 必须比 `listRoot` 大一层**：推广卡可能被塞在 `.next-play`（第一张视频卡的同级容器）里，底部广告横幅则是 `.recommend-list-v1` 的兄弟节点，只在 listRoot 里扫会漏。所以从 listRoot 往上爬到 `[class*="right-container"]` / `[class*="rcmd"]` / `[class*="recommend"]` 这一层。**但范围必须仍然是一列**：`/list/watchlater` 页面上 RECO_ROOTS 的 `[class*='playlist']` 会匹到整个页面容器（实测 1559×1721），于是推广扫描变成全页扫描，导航里的活动入口 `/festival/S16` 被当成推广链接，`promoCardOf()` 一路爬到 `.left-entry`，把 logo + 菜单整块藏掉（用户实测：刷新后顶部导航左半边消失）。现在 `promoScope()` 的 base 与每一层候选都要过 `isColumn()`，找不到可信侧栏就干脆不做推广过滤；`plausibleCard()` 还会用 `el.closest(HEADER_SEL)` 排掉头部导航里的任何元素（查祖先，不只是后代——`.left-entry` 自己并不包 header，它在 header 里），`promoCardOf()` 对导航里的链接直接早退。**`promoCardOf()` 的边界信号和 `findCardRoot()` 不同**：推广卡里没有 bvid，所以「父节点里出现 bvid 就停」就是唯一边界（再往上就进真正的推荐列表层），配合 `plausibleCard()` 把关，否则会把 `.rec-list` 甚至整个右侧栏当卡片摘掉。
 
 命中后加 `.brf-hidden`，节点记在 `state.promoHidden`（Map，节点 → 原因），设置变更时 `restoreAll()` 去类恢复，所以关开关不用刷新页面。`state.promoCount` 会报给 popup（「另隐藏 N 张推广卡」）——推广卡没有 bvid，不会出现在命中列表里。
 
@@ -223,7 +233,7 @@ E2E 脚本有三个坑已经踩过，不要退回旧写法：headless 下 `--loa
 
 1. 改 `manifest.json` 和 `package.json` 的 `version`，两处必须一致（`npm run pack` 会检查，不一致直接退出码 2）
 2. `npm test`、`npm run check` 全绿；有条件再跑一次 `npm run e2e`
-3. `npm run pack` → 产出 `out/bili-recommend-filter-<版本>.zip`，24 个文件、manifest 在 zip 根目录
+3. `npm run pack` → 产出 `out/bili-recommend-filter-<版本>.zip`，25 个文件、manifest 在 zip 根目录
 4. 用 zip 里的内容实际载入一次：解压 → `chrome://extensions` → 「加载已解压的扩展程序」→ 打开任意播放页看过滤是否正常
 5. 提交并推送：`git add -A && git commit && git push`
 6. 建 Release 并附上 zip：`gh release create v<版本> out/bili-recommend-filter-<版本>.zip --title "..." --notes-file <文件>`

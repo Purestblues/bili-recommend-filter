@@ -37,6 +37,10 @@
     pageBvid: "",
     related: new Map(), // bvid -> Item
     relatedAt: 0,
+    // 元数据晚到时要重判的 bvid。见 applyPendingRejudge()：
+    // 卡片先用 DOM 兜底判过一次（没有 mid），之后接口/SSR 数据补齐就必须重判，
+    // 否则「屏蔽的 UP 刷新后还在，点重新扫描才消失」
+    rejudge: new Set(),
     remoteCache: new Map(), // `tag:${bvid}` / `up:${mid}` -> {status, value}
     inflight: new Set(),
     removed: new Map(), // bvid -> {node, parent, next}
@@ -63,9 +67,24 @@
     return m ? m[1] : "";
   }
 
+  /**
+   * 当前正在播放的是哪个视频。
+   *
+   * /video/BVxxx 页直接从路径拿。但 /list/* 系列页面（稍后再看、合集、系列）
+   * 地址长这样：/list/watchlater?bvid=BV1Mb5u6jEaB&oid=...，路径里根本没有 bvid，
+   * 以前这里返回空串，导致「悬停当前视频标题」的 bvid !== pageBvid 判断失效，
+   * 于是在自己正在看的视频上冒出了「屏蔽此UP」的浮窗。
+   */
   function currentPageBvid() {
     const m = location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/);
-    return m ? m[1] : "";
+    if (m) return m[1];
+    try {
+      const q = new URLSearchParams(location.search).get("bvid");
+      if (q && /^BV[0-9A-Za-z]{8,14}$/.test(q)) return q;
+    } catch {
+      /* 拿不到就算了 */
+    }
+    return "";
   }
 
   // 8 秒硬超时：SW 无响应时绝不让卡片永远卡在 pending 隐藏态
@@ -158,6 +177,9 @@
   // 这不是「依赖 class 名」——只是加分项：B 站改 class 时下面的结构算法会兜底。
   const CARD_CLASS_RE = /(^|[-_\s])(card|video-card|recommend-item|video-item|list-item)($|[-_\s])/i;
 
+  /** 站点头部（logo / 导航 / 菜单栏）。它里面永远不可能有推荐卡。 */
+  const HEADER_SEL = 'header, nav, .bili-header, #bilibili-header, [class*="bili-header"]';
+
   /**
    * 这个元素像不像一张推荐卡片？
    * 这是最后一道防线：宁可漏杀，也绝不能把导航栏/播放器/整个列表当卡片摘掉。
@@ -165,7 +187,13 @@
   function plausibleCard(el) {
     if (!el || el === document.body || el === document.documentElement) return false;
     if (el === listRoot) return false;
-    if (el.querySelector && el.querySelector("#bilibili-player, video, header, nav")) return false;
+    // 头部导航里的任何元素都不算卡片。
+    // 为什么必须显式写：导航里有个活动入口（实测是 /festival/S16），它带推广信号，
+    // 一旦推广卡扫描范围算大了，promoCardOf() 就会从那个链接一路爬到 .left-entry，
+    // 把 logo + 菜单整块藏掉（用户实测：刷页面后顶部导航左半边消失）。
+    // 注意查的是「祖先」，不只是后代：.left-entry 自己没包 header，它在 header 里。
+    if (el.closest && el.closest(HEADER_SEL)) return false;
+    if (el.querySelector && el.querySelector(`#bilibili-player, video, ${HEADER_SEL}`)) return false;
     let r;
     try {
       r = el.getBoundingClientRect();
@@ -175,6 +203,21 @@
     if (r.height > CARD_MAX_HEIGHT) return false;
     if (r.width > window.innerWidth * 0.62) return false;
     return true;
+  }
+
+  /**
+   * 这个元素是不是「一列」（右侧栏那种窄条），而不是整页 / 主内容区？
+   * 判断依据只有宽度：B 站任何页面形态下，右侧推荐栏都远窄于视口。
+   * 扫描范围一旦算成整页，就会把导航、页脚当成卡片处理（真实踩过）。
+   */
+  function isColumn(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    try {
+      const r = el.getBoundingClientRect();
+      return r.width <= window.innerWidth * 0.62;
+    } catch {
+      return false;
+    }
   }
 
   /** 从 node 向上找，返回 parent 的那个直接子元素 */
@@ -193,6 +236,27 @@
       node = node.parentElement;
     }
     return best;
+  }
+
+  /**
+   * 候选的扫描范围：列表容器本身，或者再往上包着它的那一层。
+   *
+   * 为什么需要扩大一层：B 站把右侧推荐的**第一张卡**单独包在 `.next-play` 里，
+   * 和「接下来播放」标题、以及真正装其余卡片的 `.rec-list` 同级（实测结构
+   * `.recommend-list-v1 > [.next-play, .rec-list, .rec-footer]`）。
+   * learnListRoot() 学到的是 `.rec-list`，于是第一张卡永远进不了候选集合——
+   * 表现就是「这个 UP 明明已经在黑名单里，第一张卡却始终过滤不掉」（用户实测踩到）。
+   *
+   * 只往上爬一层，而且必须仍然是侧栏那一列（宽度 ≤ 视口 62%），否则会爬到主内容区，
+   * 把播放器下面的相关推荐、甚至整页其它视频链接都吸进来。
+   */
+  function recScope(root) {
+    if (!root || !root.isConnected) return root;
+    const p = root.parentElement;
+    if (!p || p === document.body || p === document.documentElement) return root;
+    if (bvidsIn(p).size <= bvidsIn(root).size) return root; // 外面没多出卡片，没必要扩大
+    if (!isColumn(p)) return root; // 已经不是侧栏那一列了
+    return p;
   }
 
   /**
@@ -432,9 +496,12 @@
       return n;
     };
 
-    // 1) 已知列表容器：它就是权威的卡片集合（页头广告等不在其中，自动排除）
+    // 1) 已知列表容器：它就是权威的卡片集合（页头广告等不在其中，自动排除）。
+    //    首页不走 recScope（首页网格外面还有别的模块），播放页要往上带一层，
+    //    否则包在 .next-play 里的第一张卡永远不进候选。
     if (listRoot && listRoot.isConnected) {
-      if (pushAnchors(listRoot) > 0) {
+      const scope = isHomePage() ? listRoot : recScope(listRoot);
+      if (pushAnchors(scope) > 0) {
         const list = dedupeByCard(out);
         learnListRoot(list);
         return list;
@@ -759,22 +826,25 @@
     }
   }
 
+  /** 把一张被藏/被摘掉的卡片放回原位，并清掉判定标记（两处恢复都要用，故单独抽出来） */
+  function restoreNode(rec) {
+    const node = rec?.node;
+    if (!node) return;
+    // hide 模式下节点一直在 DOM 里，只是加了隐藏类，直接去类就行，别乱挪位置
+    if (!node.isConnected && rec.parent && rec.parent.isConnected) {
+      try {
+        rec.parent.insertBefore(node, rec.next && rec.next.isConnected ? rec.next : null);
+      } catch {
+        /* 原位置没了就算了 */
+      }
+    }
+    if (node.dataset) node.dataset.brfDone = "0";
+    node.classList.remove("brf-hidden", "brf-pending");
+  }
+
   /** 设置变了：把摘掉的卡片放回去重新判定 */
   function restoreAll() {
-    for (const [bvid, rec] of state.removed) {
-      const node = rec.node;
-      if (!node) continue;
-      // hide 模式下节点一直在 DOM 里，只是加了隐藏类，直接去类就行，别乱挪位置
-      if (!node.isConnected && rec.parent && rec.parent.isConnected) {
-        try {
-          rec.parent.insertBefore(node, rec.next && rec.next.isConnected ? rec.next : null);
-        } catch {
-          /* 原位置没了就算了 */
-        }
-      }
-      if (node.dataset) node.dataset.brfDone = "0";
-      node.classList.remove("brf-hidden", "brf-pending");
-    }
+    for (const [, rec] of state.removed) restoreNode(rec);
     state.removed.clear();
     state.filtered.clear();
     // 类别开关藏掉的是没有 bvid 的非视频卡，不在 removed 里，单独恢复
@@ -916,6 +986,8 @@
         delete unit.dataset.brfCat;
         state.catHidden.delete(unit);
       } else if (want) {
+        // 已记录过但类可能被框架 patch 冲掉，补回
+        unit.classList.add("brf-hidden");
         hidden++;
       }
     }
@@ -938,25 +1010,36 @@
    * 推广卡的扫描范围：从列表容器往上爬到「整个右侧栏」。
    * 必须比 listRoot 大一层：运营推广卡可能被塞在 .next-play 里（和第一张视频卡同级），
    * 底部广告横幅则是 .recommend-list-v1 的兄弟节点，只在 listRoot 里扫会漏掉。
+   *
+   * 但范围必须仍然是「侧栏那一列」。踩过的坑：/list/watchlater 这类页面上
+   * RECO_ROOTS 里 `[class*='playlist']` 会匹到整个页面容器（实测 1559×1721），
+   * 于是推广卡扫描变成了全页扫描——导航里那个活动入口（/festival/S16）被当成
+   * 推广链接，promoCardOf() 往上爬到 .left-entry，把 logo + 菜单整块藏掉。
+   * 所以这里每一层候选都要过 isColumn()，宽过视口 62% 的一律不当侧栏。
    */
   function promoScope() {
-    let base = listRoot && listRoot.isConnected ? listRoot : null;
+    let base = null;
+    if (listRoot && listRoot.isConnected && isColumn(listRoot)) base = listRoot;
     if (!base) {
       for (const sel of RECO_ROOTS) {
+        let cand = null;
         try {
-          base = document.querySelector(sel);
+          cand = document.querySelector(sel);
         } catch {
-          base = null;
+          cand = null;
         }
-        if (base) break;
+        if (cand && isColumn(cand)) {
+          base = cand;
+          break;
+        }
       }
     }
-    if (!base) return null;
+    if (!base) return null; // 找不到可信的侧栏就不做推广卡过滤（宁可漏杀）
     let pick = null;
     let n = base;
     for (let i = 0; i < 4 && n && n !== document.body && n !== document.documentElement; i++) {
       try {
-        if (n.matches && n.matches(PROMO_SCOPE_SEL)) pick = n;
+        if (n.matches && n.matches(PROMO_SCOPE_SEL) && isColumn(n)) pick = n;
       } catch {
         /* 选择器不兼容就算了 */
       }
@@ -974,6 +1057,8 @@
    */
   function promoCardOf(anchor, scope) {
     if (!anchor) return null;
+    // 导航里的活动入口（/festival/…）带推广信号，但它不是卡片，绝不能往上爬到导航块
+    if (anchor.closest && anchor.closest(HEADER_SEL)) return null;
     let pick = null;
     let node = anchor;
     for (let i = 0; i < 10; i++) {
@@ -1058,10 +1143,11 @@
       if (!el || !el.isConnected) continue;
       if (!state.promoHidden.has(el)) {
         if (el.dataset) el.dataset.brfPromo = "1";
-        el.classList.add("brf-hidden");
         state.promoHidden.set(el, { reason });
         log("隐藏推广卡", reason, String(el.className || "").slice(0, 40));
       }
+      // 无论是新藏还是已记录，都补一次类（框架 patch 可能把 class 重写掉）
+      el.classList.add("brf-hidden");
       n++;
     }
     state.promoCount = n;
@@ -1070,7 +1156,36 @@
 
   // ------------------------------------------------------------ 扫描循环
 
+  /**
+   * 元数据晚到的卡片要重判。
+   *
+   * 坑：卡片可能在元数据到达之前就被判过一次。那时 item 来自 readCardFallback()，
+   * ownerMid 是空、UP 名是从 DOM 抠的（可能被省略号截断），于是「已屏蔽的 UP」匹配不上，
+   * 卡片被判成通过并打上 brf-done="1"。之后 SSR / related 接口补齐了 mid，
+   * 但扫描循环看到 done="1" 就直接跳过——结果就是「刷新后屏蔽的 UP 又出来了，
+   * 在 popup 里点一下重新扫描才又正常」（用户实测踩到）。
+   *
+   * ingestRelated() 把「新出现的」和「补齐了关键字段的」bvid 记进 state.rejudge，
+   * 这里把它们退回未判状态：隐藏在先的先把节点复原，再交给 processCard 重判。
+   */
+  function applyPendingRejudge(candidates) {
+    if (!state.rejudge.size) return;
+    for (const { card, bvid } of candidates) {
+      if (!card || !state.rejudge.has(bvid)) continue;
+      if (card.__brfBusy) continue; // 正在判，下一轮再处理
+      const rec = state.removed.get(bvid);
+      if (rec) {
+        restoreNode(rec);
+        state.removed.delete(bvid);
+      }
+      state.filtered.delete(bvid);
+      card.dataset.brfDone = "0";
+      state.rejudge.delete(bvid);
+    }
+  }
+
   let scanTimer = null;
+
   function scheduleScan(delay = 120) {
     if (scanTimer) return;
     scanTimer = setTimeout(() => {
@@ -1090,7 +1205,15 @@
     state.deferredRemote = 0;
     // 先把非视频卡（番剧/影视/课程/直播/广告）按开关对齐，它们没有 bvid，不进候选
     if (isHomePage()) applyCategoryToggles();
+    // 自愈：B 站框架 patch 时可能把卡片 class 整个重写，brf-hidden 会被冲掉（节点还在）。
+    // 每轮扫描顺手补回，代价只是遍历最多 120 条记录；remove 模式的节点已不在 DOM，自然跳过。
+    for (const rec of state.removed.values()) {
+      const n = rec.node;
+      if (n && n.isConnected && !n.classList.contains("brf-hidden")) n.classList.add("brf-hidden");
+    }
     const candidates = collectCandidates();
+    // 元数据补齐过的卡片退回未判状态（见 applyPendingRejudge）
+    applyPendingRejudge(candidates);
     // 推广卡没有 bvid，不进候选；放在 collectCandidates 之后是为了用上刚学到的 listRoot
     if (!isHomePage()) applyPromoFilter();
     // 全部被摘掉后 candidates 会变 0，这时保留上一次的数值，避免 popup 显示「推荐条数 0」
@@ -1382,6 +1505,21 @@
 
   // ---------------------------------------------------------------- 初始化
 
+  /** 对一个 Item 来说「决定性」的字段：这些字段是空的时候判出来的结果不可信，补齐后必须重判 */
+  const DECISIVE_FIELDS = [
+    "ownerMid",
+    "ownerName",
+    "title",
+    "duration",
+    "view",
+    "like",
+    "coin",
+    "favorite",
+    "reply",
+    "pubdate",
+    "tname",
+  ];
+
   /**
    * 把一批原始条目并进 state.related。
    * 同一 bvid 可能来自多个数据源（SSR related / 接口 related / 合集列表），
@@ -1390,7 +1528,8 @@
   function ingestRelated(items, bvid) {
     if (!Array.isArray(items) || !items.length) return;
     const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-    let added = 0;
+    // 这批数据让哪些卡片「之前判过但现在有更好的依据」——它们必须重判
+    const dirty = new Set();
     for (const raw of items) {
       if (!raw || !raw.bvid) continue;
       const incoming = {
@@ -1413,22 +1552,27 @@
       const old = state.related.get(incoming.bvid);
       if (old) {
         // 合并：只补空值，不覆盖已有数据
+        let filled = false;
         for (const k of Object.keys(incoming)) {
           const cur = old[k];
           const empty = cur == null || cur === "" || (Array.isArray(cur) && !cur.length);
-          if (empty && incoming[k] != null && incoming[k] !== "") old[k] = incoming[k];
+          if (empty && incoming[k] != null && incoming[k] !== "") {
+            old[k] = incoming[k];
+            if (DECISIVE_FIELDS.includes(k)) filled = true;
+          }
         }
+        if (filled) dirty.add(incoming.bvid);
       } else {
         state.related.set(incoming.bvid, incoming);
-        added++;
+        // 这张卡可能已经被 DOM 兜底判过了（那时没有 mid），必须重判
+        dirty.add(incoming.bvid);
       }
     }
-    if (added) {
-      // 第一次拿到接口数据时，把之前靠 DOM 兜底判过的卡片放回来，用真实数据重判
-      const firstIngest = !state.relatedAt;
+    if (dirty.size) {
       state.relatedAt = Date.now();
-      if (firstIngest) restoreAll();
-      scheduleScan(0); // 数据一到就立刻判定，别让卡片先露脸
+      for (const b of dirty) state.rejudge.add(b);
+      // 数据一到就立刻重判，别让卡片先露脸
+      scheduleScan(0);
     }
   }
 
@@ -1511,6 +1655,7 @@
       state.promoCount = 0;
       listRoot = null; // 新页面的列表容器可能换了
       state.relatedAt = 0;
+      state.rejudge.clear();
       hideToolbar(true); // 换页了，强制收起
       ensureRelated();
       scheduleScan(300);
@@ -1614,6 +1759,17 @@
 
       if (msg.type === "BRF_DEBUG") {
         // 调试用：把每个 anchor 解析到的卡片元素标识出来，便于看 dedupe 是不是误合并了
+        const describeEl = (el) => {
+          if (!el) return "none";
+          let r = null;
+          try {
+            const b = el.getBoundingClientRect();
+            r = [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)];
+          } catch {
+            r = null;
+          }
+          return `${el.tagName.toLowerCase()}.${String(el.className || "").slice(0, 50)} rect=${JSON.stringify(r)}`;
+        };
         const cardIds = new WeakMap();
         let nextId = 1;
         const sig = (el) => {
@@ -1639,6 +1795,12 @@
           filteredKeys: [...state.filtered.keys()],
           removedKeys: [...state.removed.keys()],
           removeLog: state.removeLog || [],
+          // 推广卡扫描范围：它一旦算错成整页，就可能把导航栏当广告卡藏掉
+          roots: {
+            listRoot: describeEl(listRoot),
+            promoScope: describeEl(isHomePage() ? null : promoScope()),
+            promoHidden: [...state.promoHidden.keys()].map(describeEl),
+          },
           rows,
         });
         return true;

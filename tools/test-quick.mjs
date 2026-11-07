@@ -243,6 +243,75 @@ console.log(`      设置页当前显示: mid="${uiShown.mids}" name="${uiShown.
 check("设置页黑名单区域已同步", uiShown.mids.length > 0 || uiShown.names.length > 0, JSON.stringify(uiShown));
 check("设置页标题词区域已同步", uiShown.kw.includes("测试关键词XYZ"), uiShown.kw);
 
+console.log("\n== 5. 当前正在看的视频不弹快捷按钮（/list 页面的地址形态） ==");
+// /list/watchlater?bvid=BVxxx 这类地址的路径里没有 bvid。以前 pageBvid 是空串，
+// 于是悬停「正在看的那个视频」的标题会冒出「屏蔽此UP」浮窗（用户实测踩到）。
+// 登录后才能真的打开 /list 页，所以这里用 pushState 把地址换成同样的形状，
+// 验证 content script 能从 ?bvid= 认出当前视频。
+const curBvid = (await evaluate(cdp, pageSid, `location.pathname`)).match(/\/video\/(BV[0-9A-Za-z]+)/)?.[1] || "";
+check("拿到当前视频 bvid", !!curBvid, curBvid);
+await evaluate(cdp, pageSid, `history.pushState({}, '', '/list/watchlater?bvid=${curBvid}&oid=1')`);
+await sleep(2500);
+
+const listState = await evaluate(
+  cdp,
+  extSid,
+  `(async () => {
+     const tabs = await chrome.tabs.query({});
+     const tab = tabs.find((t) => (t.url || '').includes('/list/watchlater'));
+     if (!tab) return { error: 'no tab' };
+     try { return await chrome.tabs.sendMessage(tab.id, { type: 'BRF_PAGE_STATE' }); }
+     catch (e) { return { error: String(e) }; }
+   })()`,
+);
+console.log(`      content script 自报 pageBvid=${listState?.pageBvid}`);
+check("/list 形态的地址能从 ?bvid= 认出当前视频", listState?.pageBvid === curBvid, JSON.stringify(listState));
+
+// 悬停「当前视频自己的标题链接」。真实视频页的标题不是链接（是纯文本），
+// 而 /list/watchlater 页的标题是 <a href="/video/BV当前播放">，所以这里造一个同形状的锚点，
+// 位置模拟标题（左侧主内容区、页面中上部）。pageBvid 为空时（旧 bug）这里一定会弹浮窗。
+await evaluate(
+  cdp,
+  pageSid,
+  `(() => {
+     const a = document.createElement('a');
+     a.id = 'brf-fake-title';
+     a.href = '/video/${curBvid}/';
+     a.textContent = '当前正在播放的视频标题';
+     a.style.cssText = 'position:fixed;left:40px;top:200px;width:420px;height:32px;line-height:32px;z-index:99999;background:#fff;color:#000;font-size:20px;';
+     document.body.appendChild(a);
+   })()`,
+);
+await sleep(300);
+const titlePos = await evaluate(
+  cdp,
+  pageSid,
+  `(() => {
+     const a = document.querySelector('#brf-fake-title');
+     if (!a) return null;
+     const r = a.getBoundingClientRect();
+     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), href: a.getAttribute('href') };
+   })()`,
+);
+check("找到当前视频的标题链接", !!titlePos, JSON.stringify(titlePos));
+if (titlePos) {
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: titlePos.x, y: titlePos.y, button: "none" }, pageSid);
+  await sleep(500);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: titlePos.x + 3, y: titlePos.y + 3, button: "none" }, pageSid);
+  await sleep(600);
+  const tb2 = await evaluate(
+    cdp,
+    pageSid,
+    `(() => {
+       const t = document.querySelector('.brf-toolbar');
+       return t ? t.classList.contains('brf-toolbar--on') : false;
+     })()`,
+  );
+  console.log(`      悬停标题后浮窗可见: ${tb2}`);
+  check("悬停当前视频标题不弹浮窗", tb2 === false, String(tb2));
+  await evaluate(cdp, pageSid, `document.querySelector('#brf-fake-title')?.remove()`);
+}
+
 console.log(`\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed)`);
 cdp.close();
 proc.kill("SIGKILL");
