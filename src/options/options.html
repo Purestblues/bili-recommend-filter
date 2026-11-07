@@ -308,7 +308,7 @@
       <div class="form">
         <div class="field">
           <label class="check"><input type="checkbox" id="syncEnabled" /> 开启同步</label>
-          <p class="hint">开启后，每次规则变更都会自动上传合并一次；浏览器启动和每次打开这个设置页时也会拉取一次云端改动。</p>
+          <p class="hint">开启后，浏览器每次启动会拉取一次云端并合并；本机改的规则不会立刻上传，想马上同步就点下面的「立即同步」（或者重新点一次「保存并测试」）。</p>
         </div>
 
         <div class="field">
@@ -344,7 +344,7 @@
             <button class="btn btn-danger" id="btnSyncReset">重置同步基线</button>
           </div>
           <p class="hint">
-            「保存并测试」会顺带申请访问该服务器的权限（浏览器会弹一次确认）。
+            「保存并测试」会顺带申请访问该服务器的权限（浏览器会弹一次确认），并立刻同步一次。
             「重置同步基线」只清掉本机的合并基线，下一次同步会把云端和本机重新并一次，不会删数据。
           </p>
         </div>

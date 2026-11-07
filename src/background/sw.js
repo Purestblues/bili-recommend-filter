@@ -23,7 +23,6 @@ import {
   publicConfig,
   syncNow,
   syncOnStart,
-  noteSettingsChanged,
   testConnection,
   resetSyncState,
 } from "./dav-sync.js";
@@ -530,32 +529,14 @@ chrome.runtime.onInstalled.addListener(async () => {
   const got = await chrome.storage.local.get("brf_settings");
   if (!got?.brf_settings) await writeSettings(normalizeSettings(null));
   console.log("[BRF] 已安装");
-  syncOnStart("installed");
 });
 
-// 浏览器启动：拉一次云端（别的机器可能改过）
+// WebDAV 同步的唯一自动入口：浏览器启动时拉一次云端（别的机器可能改过）。
+//
+// 这是用户明确要求的语义：本机改规则不会立刻上传，等下次启动才合并。
+// 所以不要再往这里加 SW 唤醒 / storage.onChanged / 打开设置页 这类自动入口 ——
+// 用户要的是「一开浏览器就同步一次，其余时间别动网盘」。
+// 用户主动触发的两条路：设置页的「立即同步」按钮，和「保存并测试」后的那一次。
 chrome.runtime.onStartup.addListener(() => {
   syncOnStart("startup");
-});
-
-// service worker 每次被唤醒也补一次，但 10 分钟内不重复（SW 会频繁休眠/唤醒）
-(async () => {
-  try {
-    const cfg = await readSyncConfig();
-    if (!cfg.enabled) return;
-    if (Date.now() - (cfg.lastOkAt || 0) < 10 * 60 * 1000) return;
-    syncOnStart("wake");
-  } catch {
-    /* 同步不可用不影响其它功能 */
-  }
-})();
-
-// 设置一变就安排同步。
-// 注意：这条监听是唯一的挂载点 —— 设置页、popup、页面快捷按钮的写入全走 storage，
-// 所以不管改动从哪来都会经过这里。dav-sync 内部会再判一次「有没有实质变化」。
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes["brf_settings"]) return;
-  const next = changes["brf_settings"].newValue;
-  if (!next) return;
-  noteSettingsChanged(normalizeSettings(next)).catch(() => {});
 });

@@ -9,7 +9,7 @@
 // 2) 每次写远端都是「先读、再合并、再条件写（If-Match）」，绝不整文件覆盖，
 //    否则两台机器同时改必丢数据
 // 3) 写之前把旧文件备份一份（最多留 10 份），合并逻辑万一写错还能捞回来
-// 4) 同步过程自身造成的 settings 变更不能再触发同步（否则死循环）
+// 4) 自动同步只在浏览器启动时跑一次（见 sw.js 的 onStartup），不监听 storage 变化
 
 import { readSettings, writeSettings } from "../lib/defaults.js";
 import {
@@ -25,7 +25,6 @@ export const DEFAULT_DIR = "bili-recommend-filter";
 const FILE_NAME = "settings.json";
 const BACKUP_DIR = "backup";
 const BACKUP_KEEP = 10;
-const MIN_GAP_MS = 5000; // 两次推送的最小间隔，避免连续编辑把坚果云打出限流
 const REQUEST_TIMEOUT = 20000;
 const RETRY_ALARM = "brf-sync-retry";
 
@@ -76,10 +75,7 @@ export function publicConfig(cfg) {
   };
 }
 
-let applying = false; // 正在把远端结果写回本地设置，期间不要再触发推送
 let running = null;
-let lastPushAt = 0;
-let debounceTimer = null;
 
 // -------------------------------------------------------------- WebDAV 层
 
@@ -312,35 +308,30 @@ export async function syncNow({ reason = "manual" } = {}) {
         push = payloadView(merged) !== payloadView(remote.payload);
       }
 
-      // 合并结果写回本地（这里必须绕过「推送」）
+      // 合并结果写回本地
       const nextSettings = payloadToSettings(merged, settings);
       const settingsChanged =
         JSON.stringify(nextSettings.rules) !== JSON.stringify(settings.rules) ||
         JSON.stringify(nextSettings.blockedUps) !== JSON.stringify(settings.blockedUps) ||
         JSON.stringify(nextSettings.whitelist) !== JSON.stringify(settings.whitelist);
 
-      applying = true;
-      try {
-        if (settingsChanged) await writeSettings(nextSettings);
-        const action = [
-          didPush ? "已上传本机改动" : "已同步（云端无变化）",
-          settingsChanged ? "并应用了云端修改" : "",
-          !didPush && localChanged ? "（本机有未推送的改动）" : "",
-        ]
-          .filter(Boolean)
-          .join("");
-        await writeSyncConfig({
-          payload: merged,
-          lastOkAt: Date.now(),
-          lastError: "",
-          lastErrorAt: 0,
-          lastRev: merged.rev || 0,
-          retries: 0,
-          lastAction: `${action}（${reason}）`,
-        });
-      } finally {
-        applying = false;
-      }
+      if (settingsChanged) await writeSettings(nextSettings);
+      const action = [
+        didPush ? "已上传本机改动" : "已同步（云端无变化）",
+        settingsChanged ? "并应用了云端修改" : "",
+        !didPush && localChanged ? "（本机有未推送的改动）" : "",
+      ]
+        .filter(Boolean)
+        .join("");
+      await writeSyncConfig({
+        payload: merged,
+        lastOkAt: Date.now(),
+        lastError: "",
+        lastErrorAt: 0,
+        lastRev: merged.rev || 0,
+        retries: 0,
+        lastAction: `${action}（${reason}）`,
+      });
       if (cfg.retries) chrome.alarms?.clear(RETRY_ALARM);
       return {
         ok: true,
@@ -369,43 +360,12 @@ export async function syncNow({ reason = "manual" } = {}) {
   return running;
 }
 
-/** 本地设置变了 → 防抖推送（含拉取合并，因为可能同时有远端改动） */
-export function scheduleSync(reason = "change") {
-  if (applying) return;
-  if (debounceTimer) clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null;
-    readSyncConfig()
-      .then((cfg) => {
-        if (!cfg.enabled) return;
-        if (Date.now() - lastPushAt < MIN_GAP_MS) {
-          // 太近了，等一会儿再来，避免连续编辑把服务器打出限流
-          scheduleSync(reason);
-          return;
-        }
-        lastPushAt = Date.now();
-        syncNow({ reason });
-      })
-      .catch(() => {});
-  }, 2500);
-}
-
 /**
- * storage 变了之后调用：先判断「跟上次同步的状态相比有没有实质变化」。
+ * 启动时调用（唯一的自动入口）：只在开了同步时才拉一次。
  *
- * 为什么必须比对而不是直接推：同步自己把远端结果写回本地时也会触发 storage 事件，
- * 而 `applying` 标记是同步函数内的变量，事件到达时它早就恢复 false 了。
- * 只有「真有差异」才安排推送，否则会出现同步 ↔ 推送的死循环。
+ * 本机规则改动不再自动上传，所以这里没有配套的「推送调度器」。
+ * 需要立刻上传时走设置页的「立即同步」或「保存并测试」。
  */
-export async function noteSettingsChanged(settings) {
-  const cfg = await readSyncConfig();
-  if (!cfg.enabled || !cfg.url || !cfg.user || !cfg.pass) return;
-  const local = reconcilePayload(cfg.payload, settings, Date.now());
-  if (payloadView(local) === payloadView(cfg.payload || emptyPayload())) return;
-  scheduleSync("change");
-}
-
-/** 设置页 / 后台初始化时调用：只在开了同步时才拉 */
 export async function syncOnStart(reason = "startup") {
   const cfg = await readSyncConfig();
   if (!cfg.enabled) return { ok: false, skipped: "未开启同步" };

@@ -480,23 +480,28 @@ try {
     cdp,
     sid,
     `(async () => {
-       // 改一条规则，看 service worker 会不会自己安排一次同步（这里服务器是假的，只验证被触发了）
-       const cfgBefore = (await chrome.storage.local.get('brf_sync')).brf_sync;
+       // 自动同步只在浏览器启动时（onStartup）跑一次：改一条规则之后后台**不该**自己发起同步。
+       // 这里服务器是假的，所以「有没有尝试过」看 brf_sync 的 lastErrorAt / lastAction 有没有变。
+       const before = (await chrome.storage.local.get('brf_sync')).brf_sync;
        const s = (await chrome.storage.local.get('brf_settings')).brf_settings;
        s.rules = [...(s.rules || []), { id: 'r_auto', enabled: true, metric: 'view', op: 'lt', value: 1, value2: '', note: '' }];
        await chrome.storage.local.set({ brf_settings: s });
-       await new Promise((r) => setTimeout(r, 6000));
-       return { before: cfgBefore.lastOkAt, last: (await chrome.storage.local.get('brf_sync')).brf_sync };
+       await new Promise((r) => setTimeout(r, 8000));
+       const after = (await chrome.storage.local.get('brf_sync')).brf_sync;
+       return { before, after };
      })()`,
   );
   check(
-    "规则变更后自动尝试同步（失败也写进状态）",
-    !!auto.last?.lastErrorAt && auto.last.lastErrorAt > 0,
-    JSON.stringify({ err: auto.last?.lastError?.slice(0, 80), at: auto.last?.lastErrorAt }),
+    "改规则不再自动同步（自动同步只在浏览器启动时）",
+    auto.after?.lastErrorAt === auto.before?.lastErrorAt &&
+      auto.after?.lastOkAt === auto.before?.lastOkAt &&
+      auto.after?.lastAction === auto.before?.lastAction,
+    JSON.stringify({ before: auto.before?.lastAction, after: auto.after?.lastAction, errAt: auto.after?.lastErrorAt }),
   );
 
   // 服务器不可达时，设置页的首次渲染绝不能被同步请求拖住
-  // （曾经把「打开设置页时拉一次」写成 await，网络超时 20 秒 → 用户看到空白页）
+  // （曾经把「打开设置页时拉一次」写成 await，网络超时 20 秒 → 用户看到空白页；
+  //  现在打开设置页已经不拉了，这条留着守「别再把它加回来」）
   const t0 = Date.now();
   await cdp.send("Page.reload", {}, sid);
   let rendered = 0;
@@ -513,6 +518,42 @@ try {
     }
   }
   check("服务器不可达时设置页仍然秒开（不被同步请求拖住）", rendered > 0 && rendered < 6000, `${rendered}ms`);
+
+  // 页面重载会唤醒 service worker；以前「SW 唤醒」「打开设置页」都会拉一次云端，
+  // 现在都去掉了。服务器是假的，所以只要有人尝试过就会写 lastErrorAt。
+  const afterOpen = await evaluate(
+    cdp,
+    sid,
+    `(async () => (await chrome.storage.local.get('brf_sync')).brf_sync || null)()`,
+  );
+  check(
+    "打开设置页 / 唤醒 SW 都不再拉取云端",
+    afterOpen?.lastErrorAt === auto.after?.lastErrorAt && afterOpen?.lastAction === auto.after?.lastAction,
+    JSON.stringify({ errAt: afterOpen?.lastErrorAt, lastAction: afterOpen?.lastAction }),
+  );
+
+  // 自动同步只剩 onStartup 一个入口。headless 下没法真的重启浏览器
+  // （Chrome 156 忽略 --load-extension，CDP 装的扩展不写进 profile），
+  // 所以这里退一步守「service worker 里确实注册了这个监听」——监听被删或改名就会红。
+  let startupHook = { has: false, err: "没找到 service worker 目标" };
+  try {
+    const targets = (await cdp.send("Target.getTargets")).targetInfos;
+    const swTarget = targets.find((t) => t.type === "service_worker" && t.url.endsWith("/src/background/sw.js"));
+    if (swTarget) {
+      const swAttach = await cdp.send("Target.attachToTarget", { targetId: swTarget.targetId, flatten: true });
+      startupHook = await evaluate(
+        cdp,
+        swAttach.sessionId,
+        `(() => {
+           try { return { has: chrome.runtime.onStartup.hasListeners() }; }
+           catch (e) { return { has: false, err: String(e && e.message || e) }; }
+         })()`,
+      );
+    }
+  } catch (e) {
+    startupHook = { has: false, err: String(e?.message || e) };
+  }
+  check("只在浏览器启动时同步（service worker 里注册了 onStartup）", startupHook.has === true, JSON.stringify(startupHook));
 
   check(
     "打包清单里声明了可选的主机权限（同步任意 WebDAV 服务器需要它）",
@@ -605,7 +646,7 @@ if (URL_ && USER_ && PASS_) {
     const r1 = await remoteText();
     check("云端文件里能看到规则和黑名单", r1.includes("r_e2e") && r1.includes("端到端UP"), r1.slice(0, 120));
 
-    // 改一条规则 → 后台应当自动同步（这里验证「每次规则变更都会同步」这条需求）
+    // 改一条规则 → 后台**不该**自己上传（自动同步只在浏览器启动时跑）
     await evaluate(
       cdp2,
       sid2,
@@ -617,17 +658,27 @@ if (URL_ && USER_ && PASS_) {
     );
     let autoOk = false;
     let waited = 0;
-    while (waited < 25000) {
-      await sleep(2500);
-      waited += 2500;
-      const cfg = await evaluate(cdp2, sid2, `(async () => (await chrome.storage.local.get('brf_sync')).brf_sync)()`);
-      const txt = await remoteText();
-      if (txt.includes("r_auto_e2e") && cfg?.lastOkAt) {
+    while (waited < 10000) {
+      await sleep(2000);
+      waited += 2000;
+      if ((await remoteText()).includes("r_auto_e2e")) {
         autoOk = true;
         break;
       }
     }
-    check("规则改完后台自动同步（不用手点）", autoOk, `等了 ${waited}ms`);
+    check("规则改完不自动上传（自动同步只在浏览器启动时）", autoOk === false, `等了 ${waited}ms`);
+
+    // 用户主动点「立即同步」才上传
+    const manual = await evaluate(
+      cdp2,
+      sid2,
+      `(async () => chrome.runtime.sendMessage({ type: 'SYNC_NOW', reason: 'manual' }))()`,
+    );
+    check(
+      "点「立即同步」能把本机改动推上云端",
+      manual?.ok === true && (await remoteText()).includes("r_auto_e2e"),
+      JSON.stringify(manual),
+    );
 
     // 反向：远端被另一台机器改了，再同步一次，本地要跟上
     const remote = JSON.parse(await remoteText());
@@ -658,6 +709,13 @@ if (URL_ && USER_ && PASS_) {
       `(async () => ((await chrome.storage.local.get('brf_settings')).brf_settings.rules || []).map((r) => r.id))()`,
     );
     check("能拉下另一台机器新增的规则", pull?.ok === true && localRules.includes("r_remote"), JSON.stringify(localRules));
+
+    // 「浏览器启动时同步」这一段没法在这里自动验证：headless Chrome 156 会忽略
+    // --load-extension（带 --disable-features=DisableLoadExtensionCommandLineSwitch 也不行），
+    // 而 CDP 的 Extensions.loadUnpacked 不把扩展写进 profile，重启后就没了 ——
+    // 于是没法造出「扩展在浏览器启动时已在位」这个前提。
+    // 现在由第 3 节守「onStartup 监听已注册 + 其它自动入口都没了」，启动同步本身靠手测：
+    // 装好扩展、配好同步、改一条规则、完全退出 Chrome 再打开，云端应当出现这条规则。
   } catch (e) {
     check("真浏览器同步链路没有抛异常", false, String(e?.message || e));
   } finally {
@@ -667,7 +725,7 @@ if (URL_ && USER_ && PASS_) {
     try {
       proc2.kill("SIGKILL");
     } catch {}
-    await sleep(300);
+    await sleep(500);
     // 清理云端测试文件（目录本身删不掉，坚果云对集合 DELETE 一律 403）
     const lsBody = await fetch(`${base2}${encodeURIComponent(DIR_)}/`, {
       method: "PROPFIND",

@@ -20,7 +20,7 @@ npm run fallback # 关键词首尾空格 + 元数据缺失兜底 + 晚到重判 
 npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项，需要联网）
 npm run videoad # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
 npm run exempt  # 当前 UP 豁免：同 UP 的卡不被藏 / 别家照藏 / 关开关后回到旧行为（18 项，需要联网）
-npm run sync    # WebDAV 同步：合并/删除传播/墓碑回收 + 真服务器双机演练 + 真浏览器自动同步（42 项）
+npm run sync    # WebDAV 同步：合并/删除传播/墓碑回收 + 真服务器双机演练 + 真浏览器自动同步（45 项）
 npm run webdav  # 同上，但强制要求真网络部分（缺 BRF_WEBDAV_* 环境变量直接失败）
 ```
 
@@ -64,7 +64,7 @@ tools/
   test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项）
   test-videoad.mjs         播放页侧栏推广卡：注入假推广卡 + 真实广告位，验证藏 / 恢复 / 不误伤（19 项）
   test-exempt-up.mjs       当前 UP 豁免：全 UP 拉黑后同 UP 的卡仍可见 + 关开关后失效（18 项）
-  test-sync.mjs            WebDAV 同步：纯逻辑 + 真服务器双机演练 + 真浏览器自动同步（42 项）
+  test-sync.mjs            WebDAV 同步：纯逻辑 + 真服务器双机演练 + 真浏览器自动同步（45 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
   pack.mjs                 打发布 zip（out/bili-recommend-filter-<版本>.zip），自实现 ZIP 写入，零依赖
   cdp.mjs                  极简 CDP 客户端（无依赖）
@@ -161,7 +161,9 @@ LICENSE                   MIT
 
 **写入必须「先读、再合并、再条件写」。** `PUT` 带 `If-Match: <etag>`，拿到 412 就重新读一遍、重新合并再写（最多重试 2 次）。坚果云实测支持 `If-Match`（不匹配返回 412），所以两台机器同时推不会互相覆盖。推送前把旧文件另存到 `backup/settings-<数字时间戳>.json`，只留 10 份。
 
-**同步自己造成的写入不能触发下一轮同步。** 设置变更的挂载点只有一个：service worker 里的 `chrome.storage.onChanged`。所以「页面快捷按钮 / popup / 设置页」任何来源的改动都会经过它。但同步把远端结果写回本地时也会触发同一个事件，因此 `noteSettingsChanged()` 会先用 `reconcilePayload` + `payloadView` 比对「相对上次同步有没有实质差异」——没差异直接返回。不要再加第二个推送入口，否则很容易写出同步 ↔ 推送的死循环。
+**自动同步只有一个入口：`chrome.runtime.onStartup`。** 这是用户 2026-11-07 明确要求的语义——「只在浏览器启动时同步一次」，其余时间不碰网盘。所以早期那些入口全部删掉了，别再按老记忆往回加：`onInstalled`（装/升级后一次）、service worker 唤醒（10 分钟内去重）、`chrome.storage.onChanged`（改规则就防抖推送）、打开设置页时拉取。连带把 `dav-sync.js` 里的 `noteSettingsChanged()` / `scheduleSync()` / 防抖与最小间隔常量一起删了——本机改动不再由后台自动上传。
+
+删掉自动推送之后有个必然后果要记住：**本机改的规则不会立刻上云，要等下次启动浏览器（或用户点「立即同步」/ 重新点「保存并测试」）**。这是用户选定的取舍，不是 bug。同时也就不用再担心「同步自己的写入触发下一轮同步」那个死循环了——触发点只剩启动和手动。
 
 **凭据不进 `brf_settings`。** 服务器地址、账号、应用密码存在独立的 `chrome.storage.local.brf_sync`，因为「导出配置」只序列化 `brf_settings`——放进设置里就等于把应用密码打进导出的 JSON。单测里有一项专门断言这件事。
 
@@ -169,7 +171,9 @@ LICENSE                   MIT
 
 **坚果云的两个实测坑。** ① 目录不存在时 `GET` 返回 **409** 而不是 404（`readRemote` 把 403/404/409 都当「还不存在」）；② **删除目录一律 403**，`DELETE` 一个空 collection 也不行——所以扩展只删文件（备份清理）、从不需要删目录，测试也只能复用固定目录（`bili-recommend-filter-test`）并只清里面的文件。备份文件名必须只用数字（`settings-20261107083751.json`），早期用 ISO 串时清理正则匹配不上，备份会无限堆积。
 
-**触发时机。** 规则变更后防抖 2.5 秒推一次（两次推送之间至少隔 5 秒，避免被网盘限流）；浏览器启动、扩展安装、service worker 被唤醒（10 分钟内不重复）、打开设置页时各拉一次。失败会写进 `brf_sync.lastError` 并按指数退避排一次 `brf-sync-retry` 闹钟（认证失败不重试，省得把账号打进风控）。
+**触发时机（2026-11-07 起只有两类）。** 自动：`chrome.runtime.onStartup`，浏览器启动时读云端 → 合并 → 需要时推送，一次。手动：设置页「立即同步」按钮，以及「保存并测试」成功后那一次（`SYNC_NOW` 消息，`reason` 分别是 `manual` / `save`）。失败会写进 `brf_sync.lastError` 并按指数退避排一次 `brf-sync-retry` 闹钟（认证失败不重试，省得把账号打进风控）——这是启动那次失败后的补救，不算额外的定时同步。
+
+**headless 下测不了「启动时同步」。** 实测 Chrome 156 直接忽略 `--load-extension`（带 `--disable-features=DisableLoadExtensionCommandLineSwitch` 也不行，扩展在启动后根本没加载），而 CDP 的 `Extensions.loadUnpacked` 不把扩展写进 profile（`Secure Preferences` 里查不到记录），所以没法造出「扩展在浏览器启动时已在位」这个前提。测试只能退一步守两件事：改规则 / 打开设置页 / 唤醒 SW 都不再发起同步（`npm run sync` 第 3 节），以及 service worker 里 `chrome.runtime.onStartup` 的监听确实注册了。启动同步本身靠手测：装好扩展、配好同步、改一条规则、完全退出 Chrome 再打开，云端应当出现这条规则。
 
 **换服务器 / 换账号时合并基线作废。** `SYNC_SAVE` 发现 url/dir/user 变了就清掉 `payload`，否则会把另一台服务器的记录混进来。设置页的「重置同步基线」按钮做同样的事（只清基线，不删数据）。
 

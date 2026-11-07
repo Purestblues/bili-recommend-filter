@@ -1029,8 +1029,7 @@ async function initSync() {
         } else {
           renderSyncStatus(`同步失败：${res?.error || res?.skipped || "未知错误"}`);
         }
-      }
-    } finally {
+      }    } finally {
       btn.disabled = false;
     }
   });
@@ -1062,31 +1061,10 @@ async function initSync() {
     renderSyncStatus("基线已重置，下次同步会重新合并。");
   });
 
-  // 打开设置页时拉一次云端（别的机器可能改过）。
-  // 注意：这里**不能 await**。网络慢或者服务器不可达时要等 20 秒超时，
-  // 会把整个设置页的首次渲染一起拖住（用户看到的是空白页）。
-  if (syncConfig?.enabled) pullOnOpen();
-}
-
-/** 后台拉取：拿到结果再更新状态与界面，不阻塞首次渲染 */
-async function pullOnOpen() {
-  renderSyncStatus("正在拉取云端…");
-  const res = await ask("SYNC_NOW", { reason: "options-open" });
-  syncConfig = await readSyncConfigUI();
-  if (!res?.ok) {
-    renderSyncStatus(`拉取失败：${res?.error || res?.skipped || "未知错误"}`);
-    return;
-  }
-  if (res.appliedRemote) {
-    const next = await readSettings();
-    if (!dirty && JSON.stringify(next) !== JSON.stringify(settings)) {
-      settings = next;
-      renderAll();
-    }
-    renderSyncStatus("已拉取云端改动并应用。");
-  } else {
-    renderSyncStatus("云端没有新改动。");
-  }
+  // 打开设置页时**不再**自动拉云端（以前的 pullOnOpen 已删）：自动同步只在浏览器
+  // 启动时跑一次（见 sw.js 的 onStartup），想立刻合并就点上面的「立即同步」。
+  // 如果以后要把它加回来，记得不能 await —— 服务器不可达时要等 20 秒超时，
+  // 会把设置页的首次渲染拖成空白页。
 }
 
 async function init() {
