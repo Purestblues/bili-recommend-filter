@@ -649,3 +649,32 @@ textarea {
 .log-table a:hover {
   color: var(--pink);
 }
+
+/* ---------------------------------------------------------- WebDAV 同步 */
+
+.sync-status {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f6f7f9;
+  border: 1px solid var(--line, #e5e7eb);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-2, #4b5563);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sync-status.is-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: var(--danger);
+}
+
+.sync-status code,
+.field .hint code {
+  background: #eef0f3;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}

@@ -1,6 +1,6 @@
 {
   "name": "bili-recommend-filter",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "B站播放页右侧推荐过滤扩展（Chrome MV3，零依赖、零构建）",
@@ -30,12 +30,14 @@
     "pack": "node tools/pack.mjs",
     "home": "node tools/test-home.mjs",
     "videoad": "node tools/test-videoad.mjs",
-    "check": "node --check src/lib/rules.js && node --check src/lib/metrics.js && node --check src/lib/defaults.js && node --check src/lib/promo.js && node --check src/lib/presets.js && node --check src/lib/wbi.js && node --check src/content/content.js && node --check src/content/inject.js && node --check src/background/sw.js && node --check src/options/options.js && node --check src/popup/popup.js",
+    "check": "node --check src/lib/rules.js && node --check src/lib/metrics.js && node --check src/lib/defaults.js && node --check src/lib/promo.js && node --check src/lib/presets.js && node --check src/lib/wbi.js && node --check src/content/content.js && node --check src/content/inject.js && node --check src/background/sw.js && node --check src/options/options.js && node --check src/popup/popup.js && node --check src/lib/sync.js && node --check src/background/dav-sync.js",
     "backup": "node tools/test-backup.mjs",
     "quick": "node tools/test-quick.mjs",
     "popup": "node tools/test-popup-links.mjs",
     "save": "node tools/test-save.mjs",
     "picker": "node tools/test-titlepicker.mjs",
-    "fallback": "node tools/test-fallback.mjs"
+    "fallback": "node tools/test-fallback.mjs",
+    "sync": "node tools/test-sync.mjs",
+    "webdav": "node tools/test-sync.mjs --require-webdav"
   }
 }

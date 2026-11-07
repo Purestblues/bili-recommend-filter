@@ -34,6 +34,7 @@
     <button class="tab" data-tab="video">播放页</button>
     <button class="tab" data-tab="home">主站</button>
     <button class="tab" data-tab="advanced">高级</button>
+    <button class="tab" data-tab="sync">同步</button>
     <button class="tab" data-tab="log">命中日志</button>
   </nav>
 
@@ -278,6 +279,71 @@
             <button class="btn btn-danger" id="btnReset">恢复默认设置</button>
           </div>
           <textarea id="jsonBox" rows="6" placeholder="点「导出到文本框」把当前配置放到这里，或粘贴一份配置后点「从文本框导入」"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- 同步 -->
+    <section class="panel" id="panel-sync">
+      <div class="panel-head">
+        <div>
+          <h2>WebDAV 同步</h2>
+          <p class="hint">
+            把「过滤规则、批量关键词、白名单 / 黑名单」同步到自己的 WebDAV（坚果云、Nextcloud 等）。
+            播放页 / 主站的显示偏好、远程开关、命中日志都留在本机，不同步。
+            多台机器的改动会自动合并：两边各自加的规则和关键词都会保留，删掉的也会同步删除（删除记录保留 30 天）。
+            同类型的关键词规则（例如两条「标题关键词」）会合并成一条，词表取并集。
+          </p>
+        </div>
+      </div>
+
+      <div class="form">
+        <div class="field">
+          <label class="check"><input type="checkbox" id="syncEnabled" /> 开启同步</label>
+          <p class="hint">开启后，每次规则变更都会自动上传合并一次；浏览器启动和每次打开这个设置页时也会拉取一次云端改动。</p>
+        </div>
+
+        <div class="field">
+          <label for="syncUrl">服务器地址</label>
+          <input type="text" id="syncUrl" placeholder="https://dav.jianguoyun.com/dav/" autocomplete="off" spellcheck="false" />
+          <p class="hint">填到 WebDAV 根目录为止，带不带结尾斜杠都行。</p>
+        </div>
+
+        <div class="field">
+          <label for="syncUser">账号</label>
+          <input type="text" id="syncUser" placeholder="你的账号" autocomplete="off" spellcheck="false" />
+        </div>
+
+        <div class="field">
+          <label for="syncPass">应用密码</label>
+          <input type="password" id="syncPass" placeholder="应用密码，不是登录密码" autocomplete="new-password" spellcheck="false" />
+          <p class="hint">
+            坚果云要用「应用密码」（账户信息 → 安全选项 → 添加应用密码），登录密码在 WebDAV 上不可用。
+            凭据只存在本机 <code>chrome.storage.local</code>，不进同步文件，也不会被打进「导出配置」。
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="syncDir">远端目录</label>
+          <input type="text" id="syncDir" placeholder="bili-recommend-filter" autocomplete="off" spellcheck="false" />
+          <p class="hint">会在服务器根目录下建这个文件夹，里面是 <code>settings.json</code> 和最多 10 份历史备份。</p>
+        </div>
+
+        <div class="field field--wide">
+          <div class="row">
+            <button class="btn btn-primary" id="btnSyncSave">保存并测试</button>
+            <button class="btn" id="btnSyncNow">立即同步</button>
+            <button class="btn btn-danger" id="btnSyncReset">重置同步基线</button>
+          </div>
+          <p class="hint">
+            「保存并测试」会顺带申请访问该服务器的权限（浏览器会弹一次确认）。
+            「重置同步基线」只清掉本机的合并基线，下一次同步会把云端和本机重新并一次，不会删数据。
+          </p>
+        </div>
+
+        <div class="field field--wide">
+          <label>同步状态</label>
+          <div class="sync-status" id="syncStatus">还没开启同步。</div>
         </div>
       </div>
     </section>

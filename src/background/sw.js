@@ -17,6 +17,16 @@ import {
 } from "../lib/defaults.js";
 import { fetchWbiKeys, signParams } from "../lib/wbi.js";
 import { SPACE_HINT, normalizeKeyword } from "../lib/rules.js";
+import { reconcilePayload, payloadView, emptyPayload } from "../lib/sync.js";
+import {
+  readSyncConfig,
+  publicConfig,
+  syncNow,
+  syncOnStart,
+  noteSettingsChanged,
+  testConnection,
+  resetSyncState,
+} from "./dav-sync.js";
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -474,6 +484,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "APPLY_PRESET":
           sendResponse(await applyPreset(msg.presetId, msg.rules || []));
           return;
+        // ------------------------------------------------------- WebDAV 同步
+        case "SYNC_GET":
+          sendResponse({ config: publicConfig(await readSyncConfig()) });
+          return;
+        case "SYNC_SAVE": {
+          const cur = await readSyncConfig();
+          const patch = {};
+          for (const k of ["enabled", "url", "user", "pass", "dir"]) {
+            if (msg[k] !== undefined) patch[k] = msg[k];
+          }
+          // 换了服务器/账号 → 旧的合并基线作废，避免把另一台服务器的数据混进来
+          const changedTarget =
+            (patch.url !== undefined && patch.url !== cur.url) ||
+            (patch.dir !== undefined && patch.dir !== cur.dir) ||
+            (patch.user !== undefined && patch.user !== cur.user);
+          if (changedTarget) Object.assign(patch, { payload: null, lastOkAt: 0, lastRev: 0, lastError: "" });
+          await chrome.storage.local.set({ brf_sync: { ...cur, ...patch } });
+          sendResponse({ ok: true, config: publicConfig(await readSyncConfig()), baselineReset: changedTarget });
+          return;
+        }
+        case "SYNC_TEST":
+          sendResponse(await testConnection(msg.config || null));
+          return;
+        case "SYNC_NOW":
+          sendResponse(await syncNow({ reason: msg.reason || "manual" }));
+          return;
+        case "SYNC_RESET":
+          sendResponse(await resetSyncState());
+          return;
         default:
           sendResponse(null);
       }
@@ -491,4 +530,32 @@ chrome.runtime.onInstalled.addListener(async () => {
   const got = await chrome.storage.local.get("brf_settings");
   if (!got?.brf_settings) await writeSettings(normalizeSettings(null));
   console.log("[BRF] 已安装");
+  syncOnStart("installed");
+});
+
+// 浏览器启动：拉一次云端（别的机器可能改过）
+chrome.runtime.onStartup.addListener(() => {
+  syncOnStart("startup");
+});
+
+// service worker 每次被唤醒也补一次，但 10 分钟内不重复（SW 会频繁休眠/唤醒）
+(async () => {
+  try {
+    const cfg = await readSyncConfig();
+    if (!cfg.enabled) return;
+    if (Date.now() - (cfg.lastOkAt || 0) < 10 * 60 * 1000) return;
+    syncOnStart("wake");
+  } catch {
+    /* 同步不可用不影响其它功能 */
+  }
+})();
+
+// 设置一变就安排同步。
+// 注意：这条监听是唯一的挂载点 —— 设置页、popup、页面快捷按钮的写入全走 storage，
+// 所以不管改动从哪来都会经过这里。dav-sync 内部会再判一次「有没有实质变化」。
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes["brf_settings"]) return;
+  const next = changes["brf_settings"].newValue;
+  if (!next) return;
+  noteSettingsChanged(normalizeSettings(next)).catch(() => {});
 });

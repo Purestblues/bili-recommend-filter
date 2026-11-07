@@ -19,6 +19,8 @@ npm run picker  # 标题拆字选词（23 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底 + 晚到重判 + 第一张卡（15 项，没有 .next-play 的页面会 SKIP 3 项）
 npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项，需要联网）
 npm run videoad # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
+npm run sync    # WebDAV 同步：合并/删除传播/墓碑回收 + 真服务器双机演练 + 真浏览器自动同步（42 项）
+npm run webdav  # 同上，但强制要求真网络部分（缺 BRF_WEBDAV_* 环境变量直接失败）
 ```
 
 `npm run verify` 是 WBI 签名与接口连通性的专项检查，改了 wbi.js 或 sw.js 的请求层时跑。`npm run pack` 打发布 zip（见下方「发版」）。
@@ -40,11 +42,13 @@ src/lib/                   纯逻辑，无 DOM、无 chrome API 依赖（default
   defaults.js              设置结构、归一化、chrome.storage 读写封装
   wbi.js                   WBI 签名 + 自实现 md5（service worker 里没有 md5）
   promo.js                 侧栏推广卡判据（活动页链接 / 运营推荐位 / 打点域 / 广告位 class），纯逻辑
+  sync.js                  WebDAV 同步的纯逻辑：设置 ↔ 载荷 ↔ 多机合并（带时间戳与墓碑）
 src/content/
   inject.js                MAIN world。读 window.__INITIAL_STATE__.related（主）+ hook fetch/XHR（备）
   content.js               扫 DOM、按 bvid 关联、判定、摘卡片、悬浮快捷按钮
   content.css              快捷按钮与占位样式
 src/background/sw.js       消息路由、远程抓取（标签/UP频率）、限速队列、缓存、风控退避
+src/background/dav-sync.js WebDAV 同步引擎：读写远端、合并、回写本地、失败重试
 src/options/               规则编辑器（规则/批量关键词/名单/预设/播放页/主站/高级/日志）
 src/popup/                 当前页统计、总开关、本页命中记录
 tools/
@@ -58,6 +62,7 @@ tools/
   test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底 + 元数据晚到重判 + 第一张卡（15 项）
   test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项）
   test-videoad.mjs         播放页侧栏推广卡：注入假推广卡 + 真实广告位，验证藏 / 恢复 / 不误伤（19 项）
+  test-sync.mjs            WebDAV 同步：纯逻辑 + 真服务器双机演练 + 真浏览器自动同步（42 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
   pack.mjs                 打发布 zip（out/bili-recommend-filter-<版本>.zip），自实现 ZIP 写入，零依赖
   cdp.mjs                  极简 CDP 客户端（无依赖）
@@ -140,6 +145,30 @@ LICENSE                   MIT
 **快捷按钮的提示不能被立刻藏掉。** `hideToolbar()` 会连提示一起隐藏，所以点击后是「先 flash 再延迟 1.6 秒隐藏」，不是立刻隐藏。另外 `hideToolbar()` 默认不会在输入框有焦点时执行（滚动页面会触发它，会把用户刚打的字弄丢）。
 
 **设置代际（state.gen）不能删。** 判定是异步的（要 await 动态 import 和远程请求）。如果设置在中途变了，正在跑的判定必须作废（`if (gen !== state.gen) return;`），否则会出现「旧设置算到一半 → 新设置到达 → 卡片被标记已完成 → 永不重判」的 bug。这个 bug 曾经让 20 条里只过滤掉 13 条。
+
+## WebDAV 多机同步（v0.4.0 起）
+
+同步的是「判定依据」：规则表、批量关键词、白名单、黑名单。播放页/主站的显示偏好、远程开关、命中日志都留在本机，各机器可以不同。
+
+**云端存的是「逐条记录的集合」，不是整份 settings.json。** 这是整个设计的地基：整文件覆盖一定会丢数据（A 机加词、B 机加规则，谁后写谁赢）。所以 `src/lib/sync.js` 把设置拆成记录：关键词规则按「指标 + 匹配方式」分组（组里逐词记录）、数值规则按规则 id、名单按条目。每条记录带 `u`（更新时间）和 `d`（墓碑）。合并就是逐 key 取 `u` 大的那份，因此并集、冲突、删除三种情况都能收敛。
+
+**时间戳只在内容真的变了时才更新。** `reconcilePayload(prev, settings, now)` 拿上一份同步结果当基线逐条比对：内容一样就沿用旧 `u`，变了才顶到 `now`。如果每次保存都无脑刷新 `u`，那「另一台机器的修改」永远赢不了——这是最容易写错的一处，单测第 1 节专门守「往返之后 reconcile 不再产生变化」。
+
+**删除用墓碑传播，30 天后回收。** 名单里的条目、整条数值规则被删掉时记 `{u, d:1}`；另一台机器合并时看到更新的墓碑就跟着删。关键词有一个例外：**本地把词全删了只给每个词打墓碑，不给整组打墓碑**——否则「我在 A 机清空标题词」会把 B 机刚加的词一起干掉，与「词表并集」的约定冲突。组的墓碑只有在删完之后又有更新的词加回来时才复活。
+
+**写入必须「先读、再合并、再条件写」。** `PUT` 带 `If-Match: <etag>`，拿到 412 就重新读一遍、重新合并再写（最多重试 2 次）。坚果云实测支持 `If-Match`（不匹配返回 412），所以两台机器同时推不会互相覆盖。推送前把旧文件另存到 `backup/settings-<数字时间戳>.json`，只留 10 份。
+
+**同步自己造成的写入不能触发下一轮同步。** 设置变更的挂载点只有一个：service worker 里的 `chrome.storage.onChanged`。所以「页面快捷按钮 / popup / 设置页」任何来源的改动都会经过它。但同步把远端结果写回本地时也会触发同一个事件，因此 `noteSettingsChanged()` 会先用 `reconcilePayload` + `payloadView` 比对「相对上次同步有没有实质差异」——没差异直接返回。不要再加第二个推送入口，否则很容易写出同步 ↔ 推送的死循环。
+
+**凭据不进 `brf_settings`。** 服务器地址、账号、应用密码存在独立的 `chrome.storage.local.brf_sync`，因为「导出配置」只序列化 `brf_settings`——放进设置里就等于把应用密码打进导出的 JSON。单测里有一项专门断言这件事。
+
+**访问任意 WebDAV 服务器要走可选主机权限。** manifest 里是 `optional_host_permissions: ["https://*/*","http://*/*"]`，用户在设置页点「保存并测试」时用 `chrome.permissions.request` 申请该 origin。注意两点：① 必须在这个按钮的点击事件里调（`await` 之后手势就失效了）；② 用户不理会弹窗时 Promise 会一直挂着，所以要自己加 60 秒超时，否则按钮永远禁用（headless 下就是这个表现）。
+
+**坚果云的两个实测坑。** ① 目录不存在时 `GET` 返回 **409** 而不是 404（`readRemote` 把 403/404/409 都当「还不存在」）；② **删除目录一律 403**，`DELETE` 一个空 collection 也不行——所以扩展只删文件（备份清理）、从不需要删目录，测试也只能复用固定目录（`bili-recommend-filter-test`）并只清里面的文件。备份文件名必须只用数字（`settings-20261107083751.json`），早期用 ISO 串时清理正则匹配不上，备份会无限堆积。
+
+**触发时机。** 规则变更后防抖 2.5 秒推一次（两次推送之间至少隔 5 秒，避免被网盘限流）；浏览器启动、扩展安装、service worker 被唤醒（10 分钟内不重复）、打开设置页时各拉一次。失败会写进 `brf_sync.lastError` 并按指数退避排一次 `brf-sync-retry` 闹钟（认证失败不重试，省得把账号打进风控）。
+
+**换服务器 / 换账号时合并基线作废。** `SYNC_SAVE` 发现 url/dir/user 变了就清掉 `payload`，否则会把另一台服务器的记录混进来。设置页的「重置同步基线」按钮做同样的事（只清基线，不删数据）。
 
 ## 主站首页（第二个页面形态）
 
@@ -233,7 +262,7 @@ E2E 脚本有三个坑已经踩过，不要退回旧写法：headless 下 `--loa
 
 1. 改 `manifest.json` 和 `package.json` 的 `version`，两处必须一致（`npm run pack` 会检查，不一致直接退出码 2）
 2. `npm test`、`npm run check` 全绿；有条件再跑一次 `npm run e2e`
-3. `npm run pack` → 产出 `out/bili-recommend-filter-<版本>.zip`，25 个文件、manifest 在 zip 根目录
+3. `npm run pack` → 产出 `out/bili-recommend-filter-<版本>.zip`，27 个文件、manifest 在 zip 根目录
 4. 用 zip 里的内容实际载入一次：解压 → `chrome://extensions` → 「加载已解压的扩展程序」→ 打开任意播放页看过滤是否正常
 5. 提交并推送：`git add -A && git commit && git push`
 6. 建 Release 并附上 zip：`gh release create v<版本> out/bili-recommend-filter-<版本>.zip --title "..." --notes-file <文件>`

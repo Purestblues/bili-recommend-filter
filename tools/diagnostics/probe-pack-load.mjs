@@ -82,6 +82,27 @@ await sleep(1800);
 const version = await evaluate(cdp, extSid, "chrome.runtime.getManifest().version");
 console.log(`载入扩展版本: ${version}`);
 
+// 打出来的包必须自己带齐：同步面板、可选主机权限、alarms 权限、两个新模块
+const mf = await evaluate(cdp, extSid, "chrome.runtime.getManifest()");
+const hasSyncTab = await evaluate(
+  cdp,
+  extSid,
+  `!!document.querySelector('[data-tab="sync"]') && !!document.querySelector('#syncUrl')`,
+);
+const hasSyncModules = await evaluate(
+  cdp,
+  extSid,
+  `(async () => {
+     try {
+       const a = await import(chrome.runtime.getURL('src/lib/sync.js'));
+       return typeof a.mergePayloads === 'function';
+     } catch (e) { return String(e); }
+   })()`,
+);
+console.log(
+  `同步面板: ${hasSyncTab} / 可选主机权限: ${JSON.stringify(mf.optional_host_permissions || [])} / alarms: ${(mf.permissions || []).includes("alarms")} / 同步模块: ${hasSyncModules}`,
+);
+
 // 一条全杀规则：播放页推荐应该基本都被藏掉，且导航不能被误伤
 const SETTINGS = {
   version: 1,
@@ -169,7 +190,15 @@ console.log("DOM 卡片前 3 张:", JSON.stringify(domCards));
 const css = await evaluate(cdp, sid, `Array.from(document.styleSheets).map((s) => s.href).filter(Boolean)`);
 console.log("页面样式表:", JSON.stringify(css));
 
-const ok = stats.total >= 5 && stats.visible <= 2 && stats.hidden >= 5 && stats.navVisible === true;
+const ok =
+  stats.total >= 5 &&
+  stats.visible <= 2 &&
+  stats.hidden >= 5 &&
+  stats.navVisible === true &&
+  hasSyncTab === true &&
+  hasSyncModules === true &&
+  (mf.optional_host_permissions || []).includes("https://*/*") &&
+  (mf.permissions || []).includes("alarms");
 console.log(ok ? "zip 载入验证通过" : "zip 载入验证失败");
 cleanup();
 process.exit(ok ? 0 : 1);

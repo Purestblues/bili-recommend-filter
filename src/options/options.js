@@ -866,6 +866,219 @@ function initSaveButton() {
   });
 }
 
+
+// ------------------------------------------------------------------ WebDAV 同步
+//
+// 同步本身跑在 service worker 里（src/background/dav-sync.js），这里只负责：
+//   1) 读写 brf_sync 里的服务器地址 / 账号 / 应用密码
+//   2) 申请访问该服务器的权限（必须在用户点击的同一个事件里调 chrome.permissions.request）
+//   3) 显示状态、触发「立即同步」
+//
+// 注意：凭据存在 brf_sync，不写进 brf_settings —— 否则「导出配置」会把应用密码打进 JSON。
+
+let syncConfig = null;
+
+function originPatternOf(url) {
+  try {
+    const u = new URL(String(url || "").trim());
+    return `${u.protocol}//${u.host}/*`;
+  } catch {
+    return "";
+  }
+}
+
+async function readSyncConfigUI() {
+  try {
+    const got = await chrome.storage.local.get("brf_sync");
+    return got?.brf_sync || null;
+  } catch {
+    return null;
+  }
+}
+
+function fmtTime(ts) {
+  if (!ts) return "从未";
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function renderSyncStatus(extra) {
+  const box = $("#syncStatus");
+  if (!box) return;
+  const cfg = syncConfig;
+  const lines = [];
+  if (!cfg || !cfg.enabled) {
+    lines.push("还没开启同步。");
+    if (cfg && (cfg.url || cfg.user)) lines.push("已填好地址，勾上「开启同步」并点「保存并测试」才会开始同步。");
+  } else {
+    lines.push(`最后成功同步：${fmtTime(cfg.lastOkAt)}　云端版本：${cfg.lastRev || 0}`);
+  }
+  if (extra) lines.push(extra);
+  if (cfg && cfg.lastError) lines.push(`最近一次失败（${fmtTime(cfg.lastErrorAt)}）：${cfg.lastError}`);
+  else if (cfg && cfg.lastAction) lines.push(`最近操作：${cfg.lastAction}`);
+  box.innerHTML = "";
+  for (const t of lines) {
+    const div = document.createElement("div");
+    div.textContent = t;
+    box.appendChild(div);
+  }
+  if (cfg && cfg.lastError) box.classList.add("is-error");
+  else box.classList.remove("is-error");
+}
+
+function syncFieldsFromConfig(cfg) {
+  if (!cfg) return;
+  $("#syncEnabled").checked = cfg.enabled === true;
+  $("#syncUrl").value = cfg.url || "";
+  $("#syncUser").value = cfg.user || "";
+  $("#syncPass").value = cfg.pass || "";
+  $("#syncDir").value = cfg.dir || "bili-recommend-filter";
+}
+
+function ask(type, payload) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type, ...(payload || {}) }, (res) => {
+        if (chrome.runtime.lastError) resolve({ ok: false, error: chrome.runtime.lastError.message });
+        else resolve(res ?? { ok: false, error: "无响应" });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e?.message || e) });
+    }
+  });
+}
+
+async function ensureSyncPermission(url) {
+  const pattern = originPatternOf(url);
+  if (!pattern) return { ok: false, message: "服务器地址不是合法 URL（要带 https://）" };
+  const has = await chrome.permissions.contains({ origins: [pattern] });
+  if (has) return { ok: true };
+  // 浏览器会弹一次「允许读取和更改 dav.xxx.com 上的数据」，必须用户点允许。
+  // 注意这个 Promise 在用户不理会弹窗时会一直挂着，所以要自己加超时，
+  // 否则「保存并测试」按钮会永远处于禁用状态（headless 下就是这种表现）。
+  const granted = await Promise.race([
+    chrome.permissions.request({ origins: [pattern] }).catch(() => false),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 60000)),
+  ]);
+  if (granted === "timeout") return { ok: false, message: "等待浏览器授权超时了：请在弹出的提示里点「允许」后重试" };
+  return granted ? { ok: true } : { ok: false, message: "你拒绝了访问该服务器的权限，同步无法工作" };
+}
+
+async function initSync() {
+  syncConfig = await readSyncConfigUI();
+  syncFieldsFromConfig(syncConfig);
+  renderSyncStatus();
+
+  // 同步过程中配置会被 service worker 改（lastOkAt / lastError），跟着刷新
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local" || !changes["brf_sync"]) return;
+      syncConfig = changes["brf_sync"].newValue || null;
+      renderSyncStatus();
+    });
+  } catch {
+    /* 忽略 */
+  }
+
+  $("#btnSyncSave").addEventListener("click", async () => {
+    const url = $("#syncUrl").value.trim();
+    const user = $("#syncUser").value.trim();
+    const pass = $("#syncPass").value;
+    const dir = $("#syncDir").value.trim() || "bili-recommend-filter";
+    const enabled = $("#syncEnabled").checked;
+    const btn = $("#btnSyncSave");
+    btn.disabled = true;
+    renderSyncStatus("正在检查服务器…");
+    try {
+      // 权限申请必须在点击事件里同步发起（await 之后手势就失效了），所以先申请、再保存
+      const perm = await ensureSyncPermission(url);
+      if (!perm.ok) {
+        renderSyncStatus(perm.message);
+        return;
+      }
+      const saved = await ask("SYNC_SAVE", { enabled, url, user, pass, dir });
+      if (!saved?.ok) {
+        renderSyncStatus(saved?.error || "保存失败");
+        return;
+      }
+      syncConfig = saved.config;
+      renderSyncStatus("正在测试连接…");
+      const test = await ask("SYNC_TEST");
+      if (!test?.ok) {
+        renderSyncStatus(`连接失败：${test?.message || test?.error || "未知错误"}`);
+        return;
+      }
+      renderSyncStatus(`${test.message}${test.remoteRev ? `（云端版本 ${test.remoteRev}）` : ""}`);
+      if (enabled) {
+        const res = await ask("SYNC_NOW", { reason: "save" });
+        if (res?.ok) {
+          const next = await readSyncConfigUI();
+          syncConfig = next;
+          renderSyncStatus(`已同步（云端版本 ${res.rev}）${res.appliedRemote ? "，并应用了云端改动" : ""}`);
+        } else {
+          renderSyncStatus(`同步失败：${res?.error || res?.skipped || "未知错误"}`);
+        }
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#btnSyncNow").addEventListener("click", async () => {
+    const btn = $("#btnSyncNow");
+    btn.disabled = true;
+    renderSyncStatus("正在同步…");
+    try {
+      const res = await ask("SYNC_NOW", { reason: "manual" });
+      syncConfig = await readSyncConfigUI();
+      if (res?.ok) {
+        renderSyncStatus(`已同步（云端版本 ${res.rev}）${res.appliedRemote ? "，并应用了云端改动" : ""}`);
+      } else {
+        renderSyncStatus(`同步失败：${res?.error || res?.skipped || "未知错误"}`);
+      }
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#btnSyncReset").addEventListener("click", async () => {
+    const ok = confirm(
+      "重置本机的同步基线？\n\n只会清掉「上次同步到了什么」的记录，下一次同步会把云端和本机重新合并一次，不会删除数据。",
+    );
+    if (!ok) return;
+    await ask("SYNC_RESET");
+    syncConfig = await readSyncConfigUI();
+    renderSyncStatus("基线已重置，下次同步会重新合并。");
+  });
+
+  // 打开设置页时拉一次云端（别的机器可能改过）。
+  // 注意：这里**不能 await**。网络慢或者服务器不可达时要等 20 秒超时，
+  // 会把整个设置页的首次渲染一起拖住（用户看到的是空白页）。
+  if (syncConfig?.enabled) pullOnOpen();
+}
+
+/** 后台拉取：拿到结果再更新状态与界面，不阻塞首次渲染 */
+async function pullOnOpen() {
+  renderSyncStatus("正在拉取云端…");
+  const res = await ask("SYNC_NOW", { reason: "options-open" });
+  syncConfig = await readSyncConfigUI();
+  if (!res?.ok) {
+    renderSyncStatus(`拉取失败：${res?.error || res?.skipped || "未知错误"}`);
+    return;
+  }
+  if (res.appliedRemote) {
+    const next = await readSettings();
+    if (!dirty && JSON.stringify(next) !== JSON.stringify(settings)) {
+      settings = next;
+      renderAll();
+    }
+    renderSyncStatus("已拉取云端改动并应用。");
+  } else {
+    renderSyncStatus("云端没有新改动。");
+  }
+}
+
 async function init() {
   settings = await readSettings();
   initTabs();
@@ -875,6 +1088,7 @@ async function init() {
   initVideo();
   initHome();
   initLog();
+  await initSync();
   initExternalSync();
   initSaveButton();
   renderPresets();
