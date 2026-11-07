@@ -35,6 +35,11 @@
     // 否则「旧设置算到一半 → 新设置到达 → 卡片被标记已完成 → 永不重判」
     gen: 0,
     pageBvid: "",
+    // 当前播放视频的 UP（「当前 UP 豁免」用）。mid 优先来自 inject.js 读到的 SSR 状态，
+    // 拿不到时由 pageOwner() 从页面 DOM 里抠。见 rules.js 的 exemptCurrentOwner()。
+    pageOwner: { mid: "", name: "", from: "" },
+    // 被豁免的 bvid（只用来在 popup 里报个数，不参与判定）
+    exempted: new Set(),
     related: new Map(), // bvid -> Item
     relatedAt: 0,
     // 元数据晚到时要重判的 bvid。见 applyPendingRejudge()：
@@ -85,6 +90,70 @@
       /* 拿不到就算了 */
     }
     return "";
+  }
+
+  /** 播放/列表页。当前 UP 豁免只在这两类页面上生效，首页不参与 */
+  function isPlaybackPage() {
+    const p = location.pathname;
+    return p.startsWith("/video/") || p.startsWith("/list/");
+  }
+
+  /**
+   * 从 DOM 里抠当前 UP。
+   *
+   * 实测（2026-11）播放页的 UP 落在 `.up-detail-top a.up-name`（文字是 UP 名）和
+   * `.up-info--left a.up-avatar`（只有链接），祖先链里都带 up-info / up-detail。
+   * 但右侧每张推荐卡里的 UP 链接结构一模一样（实测 `div.upname > a`），所以必须把落在
+   * 卡片 / 评论区里的链接排掉，否则会把「某张推荐卡的 UP」当成正在看的 UP，豁免一大片。
+   */
+  const PAGE_OWNER_SELECTORS = [
+    ".up-detail-top a[href*='space.bilibili.com']",
+    "[class*='up-info'] a[href*='space.bilibili.com']",
+    "[class*='upinfo'] a[href*='space.bilibili.com']",
+    "a.up-name[href*='space.bilibili.com']",
+    "#v_upinfo a[href*='space.bilibili.com']",
+  ];
+  const NOT_PAGE_OWNER_SEL =
+    '[class*="video-page-card"], [class*="card-box"], [class*="rec-list"], [class*="bili-video-card"], [class*="feed-card"], #comment, [class*="reply"]';
+
+  function readPageOwnerFromDom() {
+    for (const sel of PAGE_OWNER_SELECTORS) {
+      let els;
+      try {
+        els = document.querySelectorAll(sel);
+      } catch {
+        continue;
+      }
+      for (const el of els) {
+        if (el.closest && el.closest(NOT_PAGE_OWNER_SEL)) continue;
+        const m = String(el.getAttribute("href") || "").match(/space\.bilibili\.com\/(\d+)/);
+        if (!m) continue;
+        const name = (el.textContent || "").trim().slice(0, 60);
+        return { mid: m[1], name, from: "dom" };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 当前 UP：SSR 里的 mid 优先，DOM 只补它缺的部分（/list 页的 SSR 常常是空的）。
+   *
+   * 性能红线：这个函数会被每张候选卡调一次（一页 40 张）。所以有 mid 就直接返回，
+   * 不再碰 DOM；只有连 mid 都没有时才会去查，而且失败也要节流——否则一次扫描
+   * 就是 40 次 × 最多 5 个选择器，会直接把单次扫描耗时撞上 60ms 的告警线。
+   */
+  let ownerDomAt = 0;
+  function pageOwner() {
+    if (!isPlaybackPage()) return null;
+    const cur = state.pageOwner || {};
+    if (cur.mid) return cur;
+    const now = Date.now();
+    if (now - ownerDomAt < 800) return null;
+    ownerDomAt = now;
+    const dom = readPageOwnerFromDom();
+    if (!dom) return null;
+    state.pageOwner = { mid: dom.mid, name: cur.name || dom.name, from: cur.from || dom.from };
+    return state.pageOwner;
   }
 
   // 8 秒硬超时：SW 无响应时绝不让卡片永远卡在 pending 隐藏态
@@ -676,6 +745,30 @@
   }
 
   async function decideAndApply(card, bvid, item, settings, gen) {
+    const engine = await loadEngine();
+    if (gen !== state.gen) return; // 设置已经变了，本次结果作废
+
+    // 当前 UP 豁免：用户在看这位 UP 的视频，就地说明他此刻想看这位 UP，右侧推荐同一 UP 的
+    // 其他稿件不该被自己的规则拦掉（黑名单、标题词、播放量… 一律跳过）。放在最前面有两个原因：
+    // ① 它是「豁免」，必须比任何规则优先级高（包括黑名单）；
+    // ② 它不需要远程数据，提前短路能省下本页有限的远程请求预算。
+    const exemptOwner = pageOwner();
+    const exempt =
+      settings.video?.exemptCurrentUp === false
+        ? null
+        : engine.exemptCurrentOwner?.(item, exemptOwner, { enabled: true });
+    if (exempt) {
+      // 之前被藏过（例如先识别错了 UP，或刚改了设置）就先放回去，再打上完成标记
+      const rec = state.removed.get(bvid);
+      if (rec) restoreNode(rec);
+      state.removed.delete(bvid);
+      state.filtered.delete(bvid);
+      card.dataset.brfDone = "1";
+      card.classList.remove("brf-pending");
+      state.exempted.add(bvid);
+      return;
+    }
+
     const needs = needsOf(settings.rules);
     // 主站的远程指标默认关（settings.home.remote），要用得自己打开；播放页行为不变
     const homeNow = isHomePage();
@@ -689,9 +782,6 @@
       remoteEnabled: settings.remoteEnabled,
       now: Date.now(),
     };
-
-    const engine = await loadEngine();
-    if (gen !== state.gen) return; // 设置已经变了，本次结果作废
     let res = engine.evaluate(item, { ...baseCtx, remote: {} });
 
     // 本地规则已经能定案 → 不发任何远程请求
@@ -865,6 +955,7 @@
     }
     state.promoHidden.clear();
     state.promoCount = 0;
+    state.exempted.clear();
     for (const el of document.querySelectorAll("[data-brf-done]")) {
       el.dataset.brfDone = "0";
     }
@@ -1581,6 +1672,18 @@
     const d = e.data;
     if (!d || d[CHANNEL] !== true) return;
     if (d.type === "related") ingestRelated(d.items, d.bvid);
+    if (d.type === "page") {
+      // 当前视频的 UP 到了。mid 可能和 DOM 兜底认出来的不一样（SPA 换视频、或第一次兜底认错了），
+      // 那就把已判过的卡片全部退回未判重治，否则「木已成舟」的豁免/过滤不会再变。
+      const prevMid = String(state.pageOwner?.mid || "");
+      const nextMid = String(d.mid || "");
+      state.pageOwner = { mid: nextMid, name: d.name || "", from: "ssr" };
+      const alreadyWorked = state.filtered.size > 0 || state.exempted.size > 0 || state.removed.size > 0;
+      if (prevMid !== nextMid && (prevMid || alreadyWorked)) {
+        state.exempted.clear();
+        restoreAndRescan();
+      }
+    }
   });
 
   // 兜底：SSR 状态没拿到（页面改版/被拦截）才自己请 SW 拉一次接口。
@@ -1653,6 +1756,10 @@
       state.removed.clear();
       state.promoHidden.clear();
       state.promoCount = 0;
+      // 换页了：当前 UP 与豁免名单都作废，重新取（inject.js 会在新页面上再发一次）
+      state.pageOwner = { mid: "", name: "", from: "" };
+      ownerDomAt = 0;
+      state.exempted.clear();
       listRoot = null; // 新页面的列表容器可能换了
       state.relatedAt = 0;
       state.rejudge.clear();
@@ -1676,6 +1783,10 @@
           categoriesHidden: state.catCount || 0,
           promoHidden: state.promoCount || 0,
           deferredRemote: state.deferredRemote || 0,
+          // 当前 UP 豁免：popup 里要能看出「它确实在干活」，否则用户会以为规则失效了
+          exempted: state.exempted.size,
+          pageOwnerMid: state.pageOwner?.mid || "",
+          pageOwnerName: state.pageOwner?.name || "",
           hits: [...state.filtered.entries()].slice(0, 30).map(([bvid, reason]) => ({
             bvid,
             reason,
@@ -1706,6 +1817,7 @@
           now: Date.now(),
         };
         const out = [];
+        const explainOwner = pageOwner();
         for (const { bvid, card } of collectCandidates()) {
           const item = state.related.get(bvid) || readCardFallback(card, bvid);
           const res = engine.evaluate(item, { ...baseCtx, remote: {} });
@@ -1724,6 +1836,9 @@
               raw: String(w),
               codes: [...String(w)].map((c) => c.codePointAt(0).toString(16)),
             }));
+          const exempt = settings.video?.exemptCurrentUp === false
+            ? null
+            : engine.exemptCurrentOwner?.(item, explainOwner, { enabled: true }) || null;
           out.push({
             bvid,
             title: item.title || "",
@@ -1731,6 +1846,10 @@
             source: item.source || "?",
             decision: res.decision,
             reason: res.reason,
+            // 豁免是调用方在 evaluate 之前做的短路，所以 decision 仍然是规则引擎的原判（可能是 block）；
+            // effective 才是用户实际看到的结果（exempt = 没被藏）。
+            exempt,
+            effective: exempt ? "exempt" : res.decision,
             hiddenByUs: card ? card.classList.contains("brf-hidden") : null,
             titleCharCount: (item.title || "").length,
             kwRuleId: kwRule ? kwRule.id : null,

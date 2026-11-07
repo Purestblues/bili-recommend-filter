@@ -103,6 +103,20 @@ console.log(
   `同步面板: ${hasSyncTab} / 可选主机权限: ${JSON.stringify(mf.optional_host_permissions || [])} / alarms: ${(mf.permissions || []).includes("alarms")} / 同步模块: ${hasSyncModules}`,
 );
 
+// 当前 UP 豁免（v0.5.0）：设置页要有开关，规则模块要导出判据
+const hasExemptUi = await evaluate(cdp, extSid, `!!document.querySelector('#videoExemptUp')`);
+const hasExemptFn = await evaluate(
+  cdp,
+  extSid,
+  `(async () => {
+     try {
+       const m = await import(chrome.runtime.getURL('src/lib/rules.js'));
+       return typeof m.exemptCurrentOwner === 'function';
+     } catch (e) { return String(e); }
+   })()`,
+);
+console.log(`当前 UP 豁免: 设置项 ${hasExemptUi} / 判据模块 ${hasExemptFn}`);
+
 // 一条全杀规则：播放页推荐应该基本都被藏掉，且导航不能被误伤
 const SETTINGS = {
   version: 1,
@@ -116,7 +130,10 @@ const SETTINGS = {
   whitelist: { upMids: [], upNames: [], titleKeywords: [], tagKeywords: [] },
   quickButtons: true,
   logLimit: 200,
-  video: { hidePromo: false },
+  // 发版验证量的是「规则会不会把推荐藏掉」，所以两个和规则引擎无关的开关都关掉：
+  // 推广卡（会多藏几张广告横幅）与当前 UP 豁免（会放行同 UP 的几张卡，让「visible ≤ 2」失去意义）。
+  // 豁免功能是否真的打进了包，单独用下面 hasExemptUi / hasExemptFn 两项断言它存在。
+  video: { hidePromo: false, exemptCurrentUp: false },
 };
 await evaluate(cdp, extSid, `chrome.storage.local.set({brf_settings: ${JSON.stringify(SETTINGS)}})`);
 await sleep(400);
@@ -197,6 +214,8 @@ const ok =
   stats.navVisible === true &&
   hasSyncTab === true &&
   hasSyncModules === true &&
+  hasExemptUi === true &&
+  hasExemptFn === true &&
   (mf.optional_host_permissions || []).includes("https://*/*") &&
   (mf.permissions || []).includes("alarms");
 console.log(ok ? "zip 载入验证通过" : "zip 载入验证失败");

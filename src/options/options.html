@@ -167,13 +167,21 @@
         <div>
           <h2>播放页</h2>
           <p class="hint">
-            右侧推荐区偶尔会在第一个位置换成运营推广卡（指向 /toy/、/blackboard/ 这类站内活动页），右侧底部还有一条广告横幅。
-            这些卡没有 bvid，也没有播放量、时长、UP 这些字段，规则引擎判定不了，所以只能在下面按推广信号整卡隐藏——这也是它们不出现在「过滤规则」表里的原因。
+            这里有两件事不在「过滤规则」表里。一是你此刻正在看的这位 UP：他的其它稿件一律放行，哪怕命中了任何规则——
+            这是身份级豁免，不是一条规则。二是右侧偶尔插在第一个位置的运营推广卡（指向 /toy/、/blackboard/ 这类站内活动页）和右侧底部的广告横幅：
+            它们没有 bvid，也没有播放量、时长、UP 这些字段，规则引擎判定不了，只能按推广信号整卡隐藏。
           </p>
         </div>
       </div>
 
       <div class="form">
+        <div class="field">
+          <label class="check"><input type="checkbox" id="videoExemptUp" /> 不过滤当前视频 UP 的其他投稿</label>
+          <p class="hint">
+            默认开。右侧推荐里出现正在看的这位 UP 的其它稿件时直接放行：哪怕命中了「已屏蔽的 UP」、标题关键词、播放量、时长、互动率或 UP 投稿频率里的任何一条，
+            也不拦它，更不会为它发远程请求。只按 UP 身份（mid）识别；首页不适用，拿不到当前 UP 是谁时照常过滤。
+          </p>
+        </div>
         <div class="field">
           <label class="check"><input type="checkbox" id="videoHidePromo" /> 隐藏右侧的运营推广卡与广告横幅</label>
           <p class="hint">

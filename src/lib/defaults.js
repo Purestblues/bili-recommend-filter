@@ -53,6 +53,10 @@ export const DEFAULT_SETTINGS = {
   // 默认开：它们本来就是广告，不存在「用户想看这个」的场景。
   video: {
     hidePromo: true,
+    // 不过滤当前播放视频的 UP 的其他投稿。默认开：用户在看某个 UP 的视频，
+    // 说明他此刻想看这位 UP，右侧恰好推荐同一 UP 的其他稿件时不该被自己的规则拦掉。
+    // 只认当前页面的 UP（mid），首页不参与。
+    exemptCurrentUp: true,
   },
 
   // ------------------------------------------------------------------
@@ -123,7 +127,10 @@ export function normalizeSettings(raw) {
 /** 播放页字段补齐：旧设置里没有 video，按默认开处理 */
 function normalizeVideo(raw) {
   const v = raw && typeof raw === "object" ? raw : {};
-  return { hidePromo: v.hidePromo !== false };
+  return {
+    hidePromo: v.hidePromo !== false,
+    exemptCurrentUp: v.exemptCurrentUp !== false,
+  };
 }
 
 /** 主站字段补齐：旧设置里没有 home，也不能让它变成 undefined */

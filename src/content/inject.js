@@ -78,6 +78,70 @@
     return published > 0;
   }
 
+  /** 当前播放的是哪个视频（与 content.js 的 currentPageBvid 保持一致） */
+  function currentBvid() {
+    const m = location.pathname.match(/\/video\/(BV[0-9A-Za-z]+)/);
+    if (m) return m[1];
+    try {
+      const q = new URLSearchParams(location.search).get("bvid");
+      if (q && /^BV[0-9A-Za-z]{8,14}$/.test(q)) return q;
+    } catch {
+      /* 拿不到就算了 */
+    }
+    return "";
+  }
+
+  /**
+   * 当前播放的视频是哪个 UP 投的稿。
+   *
+   * 实测（2026-11）：/video 页两处都有值——__INITIAL_STATE__.upData.mid（字符串）
+   * 和 __INITIAL_STATE__.videoData.owner.mid（数字）。/list/* 页（稍后再看、合集）
+   * 则是 videoData.owner 空对象、upInfo 也常常是空，真正的作者藏在 playlist /
+   * resourceList 里，只能按当前 bvid 去列表里找。未登录时整页 SSR 都是空的，这里返回 null，
+   * content.js 会退到 DOM 兜底。
+   */
+  function readPageOwner() {
+    const st = window.__INITIAL_STATE__;
+    if (!st) return null;
+
+    const take = (o) => {
+      if (!o || typeof o !== "object") return null;
+      const mid = o.mid ?? o.owner?.mid;
+      if (mid == null || mid === "" || Number(mid) === 0) return null;
+      const name = o.name ?? o.owner?.name;
+      return { mid: String(mid), name: typeof name === "string" ? name : "" };
+    };
+
+    const bvid = currentBvid();
+    const owner = st.videoData && st.videoData.owner;
+    const direct = take(st.upData) || take(st.upInfo) || take(owner ? { mid: owner.mid, name: owner.name } : null);
+    if (direct) return { bvid, ...direct };
+    if (!bvid) return null;
+
+    for (const list of harvest(st, [], 0, new Set())) {
+      const hit = list.find((x) => x && x.bvid === bvid);
+      const got = hit ? take(hit) : null;
+      if (got) return { bvid, ...got };
+    }
+    return null;
+  }
+
+  let lastPageSig = "";
+  /** 把「当前视频的 UP」发给 content.js。返回 true = 已经拿到了 */
+  function publishPageOwner() {
+    const owner = readPageOwner();
+    if (!owner || !owner.mid) return false;
+    const sig = `${owner.bvid}|${owner.mid}|${owner.name}`;
+    if (sig === lastPageSig) return true;
+    lastPageSig = sig;
+    try {
+      window.postMessage({ [CHANNEL]: true, type: "page", ...owner, ts: Date.now() }, window.location.origin);
+    } catch {
+      /* postMessage 失败不影响页面 */
+    }
+    return true;
+  }
+
   /** 从各种可能的接口响应形状里挖出 [{bvid, ...}] */
   function extractItems(json) {
     if (!json) return null;
@@ -172,6 +236,33 @@
     if (location.href === lastHref) return;
     lastHref = location.href;
     publishedSigs.clear();
+    lastPageSig = "";
     readInitialState();
+    startOwnerPoll();
   }, 800);
+
+  // ---------------- 当前视频的 UP：单独一条轮询 ----------------
+  // 不能挂在 tick 上：tick 拿到推荐列表就停了，而 UP 信息（尤其是 /list/* 页）可能更晚才到位。
+  // 拿到就停，约 20 秒还没有就放弃（content.js 还能从 DOM 里抠）。
+  let ownerTimer = null;
+  let ownerTries = 0;
+  function ownerTick() {
+    ownerTries++;
+    if (publishPageOwner()) {
+      if (ownerTimer) clearInterval(ownerTimer);
+      ownerTimer = null;
+      return;
+    }
+    if (ownerTries > 80) {
+      if (ownerTimer) clearInterval(ownerTimer);
+      ownerTimer = null;
+    }
+  }
+  function startOwnerPoll() {
+    if (ownerTimer) clearInterval(ownerTimer);
+    ownerTries = 0;
+    ownerTimer = setInterval(ownerTick, 250);
+    ownerTick();
+  }
+  startOwnerPoll();
 })();

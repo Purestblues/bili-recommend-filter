@@ -92,7 +92,12 @@ async function render() {
         : "等待推荐数据加载…（可用「重新扫描」）";
       // 推广卡没有 bvid，不在下面的命中列表里，单独报一个数才看得出它在干活
       const promo = state.promoHidden || 0;
-      line.textContent = promo ? `${base}（另隐藏 ${promo} 张推广卡）` : base;
+      // 当前 UP 豁免同理：规则没错、卡片也没跑，只是一个都没拦——不报个数用户会以为扩展失效了
+      const exempted = state.exempted || 0;
+      const notes = [];
+      if (promo) notes.push(`另隐藏 ${promo} 张推广卡`);
+      if (exempted) notes.push(`另豁免当前 UP 的 ${exempted} 条投稿`);
+      line.textContent = notes.length ? `${base}（${notes.join("，")}）` : base;
     }
   }
 

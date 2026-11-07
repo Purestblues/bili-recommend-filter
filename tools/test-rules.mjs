@@ -8,6 +8,7 @@ import {
   parseDuration,
   computeRates,
   evaluate,
+  exemptCurrentOwner,
   ruleMatches,
   needsRemote,
   remoteNeeds,
@@ -469,6 +470,72 @@ check("adReason 能说清是哪类广告位", adReason("ad-report ad-floor-exp")
 check("设置默认：video.hidePromo 默认开", normalizeSettings(null).video.hidePromo === true);
 check("旧设置（没有 video 字段）也是默认开", normalizeSettings({ rules: [] }).video.hidePromo === true);
 check("显式关掉不会被归一成开", normalizeSettings({ video: { hidePromo: false } }).video.hidePromo === false);
+
+// ---------------------------------------------------------------------------
+section("16. 当前 UP 豁免（播放页不过滤同 UP 的其他投稿）");
+
+// 播放页拿到的当前 UP：/video 页实测 upData.mid 是字符串、videoData.owner.mid 是数字
+const pageOwner = { mid: "1259252171", name: "某某说AI" };
+
+check(
+  "mid 相等 → 豁免",
+  exemptCurrentOwner({ ownerMid: 1259252171, ownerName: "某某说AI" }, pageOwner) !== null,
+  String(exemptCurrentOwner({ ownerMid: 1259252171, ownerName: "某某说AI" }, pageOwner)),
+);
+check(
+  "mid 不同 → 不豁免（哪怕名字很像）",
+  exemptCurrentOwner({ ownerMid: "3745020857289391", ownerName: "某某说AI" }, pageOwner) === null,
+);
+check(
+  "有 mid 且不同时，名字完全相等也不豁免（以 mid 为准，防重名/改名）",
+  exemptCurrentOwner({ ownerMid: "999", ownerName: "某某说AI" }, pageOwner) === null,
+);
+check(
+  "卡片没 mid（DOM 兜底），UP 名完全相等 → 豁免",
+  exemptCurrentOwner({ ownerMid: "", ownerName: "某某说AI" }, pageOwner) !== null,
+);
+check(
+  "卡片没 mid，名字被省略号截断 → 不豁免（包含匹配会把「前缀相同的别人」当成同一个 UP）",
+  exemptCurrentOwner({ ownerMid: "", ownerName: "某某说AI…" }, pageOwner) === null,
+);
+check(
+  "卡片没 mid，名字是当前 UP 名的子串 → 不豁免",
+  exemptCurrentOwner({ ownerMid: "", ownerName: "某某说" }, pageOwner) === null,
+);
+check(
+  "单字 UP 名不做名字兜底（碰巧同名的人太多）",
+  exemptCurrentOwner({ ownerMid: "", ownerName: "某" }, { mid: "", name: "某" }) === null,
+);
+check(
+  "拿不到当前 UP 的 mid 时，名字兜底仍然可用",
+  exemptCurrentOwner({ ownerMid: "", ownerName: "某某说AI" }, { mid: "", name: "某某说AI" }) !== null,
+);
+check(
+  "当前 UP 的 mid 是 0（SSR 占位值）→ 不拿 mid 判据，只按名字",
+  exemptCurrentOwner({ ownerMid: "123", ownerName: "别人" }, { mid: 0, name: "某某说AI" }) === null,
+);
+check("开关关掉 → 一律不豁免", exemptCurrentOwner({ ownerMid: "1259252171" }, pageOwner, { enabled: false }) === null);
+check("item / owner 缺失不报错", exemptCurrentOwner(null, pageOwner) === null && exemptCurrentOwner({}, null) === null);
+check(
+  "空 mid + 空名字不误豁免",
+  exemptCurrentOwner({ ownerMid: "", ownerName: "" }, { mid: "", name: "" }) === null,
+);
+
+// 豁免是「调用方在 evaluate 之前短路」，不能改变 evaluate 本身的语义：
+// 同一个 UP 的卡片拿掉豁免后依然会被规则拦住（证明开关关掉确实回到旧行为）。
+const exemptRules = [{ id: "r1", enabled: true, metric: "titleKeyword", op: "contains", value: ["RSI"] }];
+const exemptItem = { bvid: "BV1xx411c7mD", title: "Gemini Carbon重返榜一:一次RSI的胜利", ownerMid: "1259252171" };
+check(
+  "evaluate 本身不认豁免（豁免只能由调用方在它之前短路）",
+  evaluate(exemptItem, { rules: exemptRules, whitelist: {}, blockedUps: { mids: [], names: [] } }).decision === "block",
+);
+
+check("设置默认：video.exemptCurrentUp 默认开", normalizeSettings(null).video.exemptCurrentUp === true);
+check("旧设置（没有该字段）也是默认开", normalizeSettings({ video: { hidePromo: true } }).video.exemptCurrentUp === true);
+check(
+  "显式关掉不会被归一成开",
+  normalizeSettings({ video: { exemptCurrentUp: false } }).video.exemptCurrentUp === false,
+);
 
 // ---------------------------------------------------------------------------
 console.log(`\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed)`);

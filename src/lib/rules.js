@@ -394,6 +394,44 @@ export function blacklistHit(item, ctx) {
 }
 
 /**
+ * 播放页「当前 UP 豁免」判据：这张卡是不是当前正在播放的视频的作者投的另一个稿。
+ *
+ * 语义是用户明确定下的：只要作者是当前正在看的这位 UP，就一律不过滤，
+ * 不管它命中的是黑名单、标题词、播放量还是 UP 投稿频率——所以这里只看身份，
+ * 不看命中原因，调用方要在 evaluate() 之前就短路。
+ *
+ * 两级判据：
+ *   1) mid 相等。这是唯一稳定的身份锚点。
+ *   2) 卡片拿不到 mid（只有 DOM 兜底数据）时，退回「UP 名完全相等」。
+ *      必须是完全相等而不是包含：DOM 里的名字经常被省略号截断（「某某某…」），
+ *      包含匹配会把「当前 UP 名是别人名字的前缀」这种巧合当成同一个 UP。
+ *      名字太短（1 个字）也不认，避免巧合。
+ *
+ * @param {{ownerMid?: any, ownerName?: string}} item 推荐卡
+ * @param {{mid?: any, name?: string}} owner 当前播放视频的 UP
+ * @param {{enabled?: boolean}} [opts]
+ * @returns {string|null} 命中时的说明，否则 null
+ */
+export function exemptCurrentOwner(item, owner, opts) {
+  if (!item || !owner) return null;
+  if (opts && opts.enabled === false) return null;
+
+  const mid = String(owner.mid ?? "").trim();
+  if (mid && mid !== "0") {
+    const itemMid = String(item.ownerMid ?? "").trim();
+    if (itemMid !== "") {
+      // 有 mid 就以 mid 为准：不同就是不同，不再看名字（名字可能重名/被改）
+      return itemMid === mid ? `当前 UP 的投稿（mid ${mid}）` : null;
+    }
+  }
+
+  const name = String(owner.name ?? "").trim();
+  const itemName = String(item.ownerName ?? "").trim();
+  if ([...name].length >= 2 && itemName === name) return `当前 UP 的投稿（${name}）`;
+  return null;
+}
+
+/**
  * 判定一条推荐项。
  * @returns {{decision:'block'|'pass'|'pending', hits:Array<{ruleId:string,text:string}>, pending:string[], reason:string|null}}
  */

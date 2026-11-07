@@ -785,7 +785,8 @@ function renderAll() {
 
 // ------------------------------------------------------------------ 播放页
 //
-// 侧栏推广卡没有 bvid，规则引擎无法判定，只能用一个开关控制（见 src/lib/promo.js）。
+// 两个开关：侧栏推广卡没有 bvid，规则引擎无法判定，只能按推广信号整卡隐藏（见 src/lib/promo.js）；
+// 「当前 UP 豁免」是身份级拦截，判定前短路，活逻辑在 rules.js 的 exemptCurrentOwner()。
 
 function initVideo() {
   const box = $("#videoHidePromo");
@@ -795,11 +796,20 @@ function initVideo() {
       scheduleSave();
     });
   }
+  const exempt = $("#videoExemptUp");
+  if (exempt) {
+    exempt.addEventListener("change", (e) => {
+      settings.video.exemptCurrentUp = e.target.checked;
+      scheduleSave();
+    });
+  }
 }
 
 function renderVideo() {
   const box = $("#videoHidePromo");
   if (box) box.checked = !settings.video || settings.video.hidePromo !== false;
+  const exempt = $("#videoExemptUp");
+  if (exempt) exempt.checked = !settings.video || settings.video.exemptCurrentUp !== false;
 }
 
 // ------------------------------------------------------------------ 主站

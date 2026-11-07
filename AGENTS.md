@@ -9,7 +9,7 @@ Chrome MV3 扩展，过滤 B 站视频播放页右侧「接下来播放」推荐
 任何改动都要跑通这三条命令，全绿才算完成：
 
 ```
-npm test        # 规则引擎单测 + 推广判据（169 项）
+npm test        # 规则引擎单测 + 推广判据 + 当前 UP 豁免（185 项）
 npm run e2e     # 真实 Chrome + 真实 B 站播放页端到端（36 项，需要联网）
 npm run backup  # 导出/导入本地文件（17 项）
 npm run quick   # 页面快捷按钮 + 设置页同步（15 项）
@@ -19,6 +19,7 @@ npm run picker  # 标题拆字选词（23 项）
 npm run fallback # 关键词首尾空格 + 元数据缺失兜底 + 晚到重判 + 第一张卡（15 项，没有 .next-play 的页面会 SKIP 3 项）
 npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项，需要联网）
 npm run videoad # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
+npm run exempt  # 当前 UP 豁免：同 UP 的卡不被藏 / 别家照藏 / 关开关后回到旧行为（18 项，需要联网）
 npm run sync    # WebDAV 同步：合并/删除传播/墓碑回收 + 真服务器双机演练 + 真浏览器自动同步（42 项）
 npm run webdav  # 同上，但强制要求真网络部分（缺 BRF_WEBDAV_* 环境变量直接失败）
 ```
@@ -62,6 +63,7 @@ tools/
   test-fallback.mjs        关键词首尾空格 + 无元数据卡片走 DOM 兜底 + 元数据晚到重判 + 第一张卡（15 项）
   test-home.mjs            主站首页端到端：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项）
   test-videoad.mjs         播放页侧栏推广卡：注入假推广卡 + 真实广告位，验证藏 / 恢复 / 不误伤（19 项）
+  test-exempt-up.mjs       当前 UP 豁免：全 UP 拉黑后同 UP 的卡仍可见 + 关开关后失效（18 项）
   test-sync.mjs            WebDAV 同步：纯逻辑 + 真服务器双机演练 + 真浏览器自动同步（42 项）
   chrome.mjs               解析本机 Chrome/Edge/Chromium 路径（BRF_CHROME 环境变量优先，三平台探测）
   pack.mjs                 打发布 zip（out/bili-recommend-filter-<版本>.zip），自实现 ZIP 写入，零依赖
@@ -89,6 +91,7 @@ tools/
     probe-firstcard.mjs      诊断「第一张卡（.next-play）不进候选」
     probe-blacklist-reload.mjs  诊断「黑名单 UP 刷新后又出现，重扫才消失」
     probe-recstructure.mjs   打印右侧推荐区容器层级（.next-play / .rec-list / .recommend-list-v1）
+    probe-pageowner.mjs     排查「当前 UP 从哪取」：SSR 字段（upData / videoData.owner / upInfo）与 DOM 落点
     probe-nav-hidden.mjs     诊断「刷新后顶部导航被藏」（含 /list 页面，BRF_URL 环境变量指定地址）
   cookie-jar.mjs           验证脚本用的最小 cookie jar
   fixtures/                真实接口返回快照
@@ -219,6 +222,24 @@ DOM 侧三个必须记住的点。**`promoScope()` 必须比 `listRoot` 大一�
 首页不走这条通道：首页有自己的 `applyCategoryToggles()`，`promo` / `ad` 类别开关已经覆盖同样语义。`applyPromoFilter()` 里 `isHomePage()` 直接 return，避免两套机制互相恢复/隐藏。
 
 测试是独立的：`npm run videoad` 真实打开播放页，注入一张 `/toy/` 假推广卡、一张 `ad-report` 假横幅，外加番剧/直播两张对照组，验证「该藏的藏、该恢复的恢复、对照组一张不碰、没把整个列表藏掉」。真实推广卡是偶发投放的，不能指望每次跑测试都碰上，所以假卡片是确定性的那部分；真实广告位如果恰好存在就顺带断言它被藏（不存在则 SKIP）。注意 `tools/e2e.mjs` 的 `BASE_SETTINGS` 里把 `video.hidePromo` 显式关掉了，否则真实广告横幅会进 `.brf-hidden` 计数，让「无规则时不误杀」和「恢复后无残留」两项断言飘。
+
+## 当前 UP 的投稿不会被过滤（v0.5.0 起）
+
+用户明确要的语义：在播放页上看某个 UP 的视频，说明他此刻想看这位 UP，所以右侧推荐里这位 UP 的**其他投稿一律不过滤**——哪怕命中了黑名单、标题关键词、播放量、时长、互动率、UP 投稿频率里的任何一条。这不是一条规则，而是判定前的短路：`decideAndApply()` 在 `engine.evaluate()` 之前先问一句 `exemptCurrentOwner()`，命中就直接放行（打 `brf-done` 但不藏、不写命中日志、也不发任何远程请求）。放在 evaluate 之前有两个硬理由：它是「豁免」，必须比黑名单优先级还高；它不需要远程数据，提前短路能省下本页有限的请求预算。
+
+「当前 UP」的来源优先 SSR：`inject.js` 新增一条 `page` 消息，从 `__INITIAL_STATE__` 里取（实测 `/video` 页 `upData.mid` 是字符串、`videoData.owner.mid` 是数字，两处都有值）。`/list/*` 页（稍后再看、合集）不一样：`videoData.owner` 是空对象、`upInfo` 也常常是空，真正的作者藏在 `playlist` / `resourceList` 里，所以兜底是「按当前 bvid 去 `harvest()` 采出来的列表里找那一条的 owner」。这条轮询是**独立**的 250ms 定时器，拿到就停、约 20 秒放弃——不能挂在原来那条 `tick` 上，因为 `tick` 拿到推荐列表就自己停了，而 UP 信息可能更晚才到位。
+
+DOM 兜底在 `content.js` 的 `pageOwner()`：按 `.up-detail-top a[href*='space.bilibili.com']` → `[class*='up-info'] a` → `a.up-name` → `#v_upinfo a` 的顺序找。**必须把落在推荐卡和评论区里的链接排掉**：实测右侧每张卡都有一个 `div.upname > a` 指向同一个 `space.bilibili.com/<mid>`，不排除的话会把「某张推荐卡的 UP」当成正在看的 UP，豁免一大片卡片，表现就是「过滤器好像全失效了」。排除用的是 `closest('[class*=video-page-card], [class*=card-box], [class*=rec-list], …)`，注释里写清了原因。
+
+判据本身在 `src/lib/rules.js` 的 `exemptCurrentOwner()`（纯逻辑，单测第 16 节 16 项）：**有 mid 就以 mid 为准**，两边 mid 都拿得到且不同时，名字碰巧一样也不豁免（防重名、防改名）。只有卡片拿不到 mid（`readCardFallback()` 的 DOM 兜底就是这种情况）时才退回「UP 名完全相等」——**必须是完全相等，不能 includes**：DOM 里的名字经常被省略号截断（`某某某…`），包含匹配会把「名字是当前 UP 名字前缀的别人」当成同一个 UP；单字名字也不认。拿不到当前 UP 的 mid 就不豁免，照常过滤（宁可漏豁免，不可误放）。
+
+设置开关是 `settings.video.exemptCurrentUp`，默认开，在设置页「播放页」标签页里。首页完全不参与：`pageOwner()` 先判 `isPlaybackPage()`（`/video/`、`/list/`），首页直接返回 null，因为首页没有「正在播放的视频」这个概念。这里还埋着一道性能保护：`pageOwner()` 会被每张候选卡调一次（一页 40 次），所以有 mid 就直接返回、不再碰 DOM；只有连 mid 都没有时才去查，而且失败也节流到 800ms 一次——否则 40 张卡 × 最多 5 个选择器，单次扫描耗时直接撞 60ms 红线（`npm run exempt` 里有一条断言看着这个值）。
+
+几个容易写错的地方。第一，豁免的卡也要打 `brf-done`，否则每轮扫描都会重新进判定（白白多一轮 `loadEngine` 和 DOM 读）；但打标记之前要把 `state.removed` 里可能存在的旧记录 `restoreNode()` 掉，否则「刚改成豁免」的卡会停在隐藏态。第二，设置变更走既有的 `restoreAndRescan()`（`restoreAll()` 会顺手清空 `state.exempted`），所以关掉开关不用刷新页面，同 UP 的卡立刻被藏回去。第三，`page` 消息晚到、而且和之前认出来的 mid 不一样时要 `restoreAndRescan()`——但首屏那次（之前没有 mid、也还没判过任何卡）不重扫，避免多点一次扫描。第四，`BRF_EXPLAIN` 里的 `decision` 仍是规则引擎的原判（可能是 `block`），`effective` 才是用户实际看到的结果（豁免时是 `exempt`），看诊断输出时别看错字段。
+
+测试是独立的 `npm run exempt`（18 项，真实播放页）。它的做法是**把本页 related 里出现的所有 UP 全塞进黑名单**——这样一次就同时证明了两件事：同 UP 的卡一张没藏（豁免生效），别的 UP 的卡照旧被藏（豁免没把整页放水），而且完全确定性，不依赖推荐流里恰好有某个关键词。实测那个页面 40 条 related 里有 5~13 条是同 UP（数字随推荐流变化），够用。后面还有两段：关掉开关 → 同 UP 的卡也被藏；再打开 → 同 UP 恢复、别家仍藏、没有残留的 `brf-hidden`。最后一段验证「豁免卡不占远程预算」：开一个必然查不到标签的远程规则，断言 `remoteUsed` 不超过非豁免卡的数量。
+
+`tools/e2e.mjs` 的 `BASE_SETTINGS` 里把 `exemptCurrentUp` 显式关掉了（和 `hidePromo` 同理）：那个套件量的是「规则到底过滤掉多少」，如果开着豁免，「播放量 ≥ 0 应该全部隐藏」会默认放行同 UP 的几张卡，「剩余不到 1/3」那条断言就没意义了。豁免的覆盖交给 `npm run exempt`。
 
 ## 关键词为什么「加了却不过滤」
 
