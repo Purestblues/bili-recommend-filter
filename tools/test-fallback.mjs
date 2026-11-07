@@ -19,6 +19,7 @@ const URL = `https://www.bilibili.com/video/${BVID}/`;
 
 let pass = 0;
 let fail = 0;
+let skipped = 0;
 const check = (n, c, d = "") => {
   if (c) {
     pass++;
@@ -28,7 +29,10 @@ const check = (n, c, d = "") => {
     console.log(`  FAIL  ${n}${d ? "  → " + d : ""}`);
   }
 };
-const skip = (n, why) => console.log(`  SKIP  ${n}  (${why})`);
+const skip = (n, why) => {
+  skipped++;
+  console.log(`  SKIP  ${n}  (${why})`);
+};
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "brf-fb-"));
 const proc = spawn(
@@ -265,7 +269,9 @@ if (firstBvid) {
   skip("关掉规则后第一张卡恢复", "同上");
 }
 
-console.log(`\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed)`);
+console.log(
+  `\n${fail === 0 ? "全部通过" : `${fail} 项失败`}  (${pass} passed, ${fail} failed, ${skipped} skipped)`,
+);
 cdp.close();
 proc.kill("SIGKILL");
 setTimeout(() => {

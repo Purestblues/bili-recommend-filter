@@ -16,7 +16,7 @@ npm run quick   # 页面快捷按钮 + 设置页同步（15 项）
 npm run popup   # popup 命中列表的标题链接（15 项）
 npm run save    # 保存可靠性：点保存/切走/关浏览器重启（13 项）
 npm run picker  # 标题拆字选词（23 项）
-npm run fallback # 关键词首尾空格 + 元数据缺失兜底 + 晚到重判 + 第一张卡（15 项）
+npm run fallback # 关键词首尾空格 + 元数据缺失兜底 + 晚到重判 + 第一张卡（15 项，没有 .next-play 的页面会 SKIP 3 项）
 npm run home    # 主站首页：候选采集 / 标题兜底 / 类别开关 / 视口懒取（24 项，需要联网）
 npm run videoad # 播放页侧栏推广卡：活动页广告 / 广告横幅 / 对照组不被误藏（19 项，需要联网）
 ```
